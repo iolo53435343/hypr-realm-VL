@@ -11,6 +11,7 @@
 
 namespace Realm {
     class CRealmManager;
+    class CRealmInputControllerManager;
     class CRealmWindowManager;
 
     inline constexpr size_t REALM_CONTROL_MAX_MESSAGE_SIZE = 64 * 1024;
@@ -25,6 +26,7 @@ namespace Realm {
     };
 
     std::string realmControlRequest(CRealmManager& manager, CRealmWindowManager& windowManager, std::string_view payload);
+    std::string realmControlRequest(CRealmManager& manager, CRealmWindowManager& windowManager, CRealmInputControllerManager* inputController, std::string_view payload);
     std::string realmControlFrame(std::string_view payload);
     bool        realmControlPeerAuthorized(uid_t peerUID, uid_t expectedUID);
 
@@ -32,6 +34,7 @@ namespace Realm {
       public:
         CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager);
         CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager, SRealmControlServerOptions options);
+        CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager, CRealmInputControllerManager& inputController, SRealmControlServerOptions options);
         ~CRealmControlServer();
 
         bool                         isListening() const;

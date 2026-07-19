@@ -1,4 +1,5 @@
 #include <realm/RealmControlServer.hpp>
+#include <realm/RealmInputController.hpp>
 #include <realm/RealmManager.hpp>
 #include <realm/RealmWindowManager.hpp>
 #include <SharedDefs.hpp>
@@ -38,6 +39,31 @@ static bool waitForControlState(CRealmManager& manager, const SP<CRealm>& realm,
     return false;
 }
 
+static bool waitForInputController(CRealmManager& manager, CRealmInputControllerManager& inputController, const SP<CRealm>& realm) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline) {
+        manager.dispatchPendingEvents();
+        inputController.dispatchPendingEvents();
+        if (inputController.controllerReady(realm->id()))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+static bool waitForControllerLog(const CRealm& realm, std::string_view expected) {
+    const auto logPath  = std::filesystem::path{realm.runtimeDirectory()} / "input-controller.log";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::ifstream     stream{logPath};
+        const std::string contents{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+        if (contents.contains(expected))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
 static std::vector<std::string> decodeControlFrames(std::string& bytes) {
     std::vector<std::string> responses;
     size_t                   offset = 0;
@@ -63,21 +89,27 @@ class CRealmControlServerTest : public testing::Test {
         std::filesystem::create_directory(m_root);
         std::filesystem::permissions(m_root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 
-        m_manager       = makeUnique<CRealmManager>(SRealmManagerOptions{
-                  .runtimeRoot            = m_root,
-                  .compositorBinary       = REALM_PROCESS_HELPER_PATH,
-                  .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
-                  .startupTimeout         = std::chrono::seconds(1),
-                  .stopTimeout            = std::chrono::milliseconds(200),
-                  .integrateWithEventLoop = false,
+        m_manager         = makeUnique<CRealmManager>(SRealmManagerOptions{
+                    .runtimeRoot            = m_root,
+                    .compositorBinary       = REALM_PROCESS_HELPER_PATH,
+                    .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
+                    .startupTimeout         = std::chrono::seconds(1),
+                    .stopTimeout            = std::chrono::milliseconds(200),
+                    .integrateWithEventLoop = false,
         });
-        m_windowManager = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
+        m_inputController = makeUnique<CRealmInputControllerManager>(*m_manager,
+                                                                     SRealmInputControllerOptions{
+                                                                         .controllerBinary       = REALM_INPUT_CONTROLLER_PROCESS_HELPER_PATH,
+                                                                         .integrateWithEventLoop = false,
+                                                                     });
+        m_windowManager   = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
         startServer();
     }
 
     void TearDown() override {
         m_server.reset();
         m_windowManager.reset();
+        m_inputController.reset();
         m_manager.reset();
         std::filesystem::remove_all(m_root);
     }
@@ -86,7 +118,7 @@ class CRealmControlServerTest : public testing::Test {
         if (options.socketPath.empty())
             options.socketPath = m_root / ".realm-control.sock";
         options.integrateWithEventLoop = false;
-        m_server                       = makeUnique<CRealmControlServer>(*m_manager, *m_windowManager, std::move(options));
+        m_server                       = makeUnique<CRealmControlServer>(*m_manager, *m_windowManager, *m_inputController, std::move(options));
         ASSERT_TRUE(m_server->isListening()) << m_server->lastError();
     }
 
@@ -132,10 +164,11 @@ class CRealmControlServerTest : public testing::Test {
         return {};
     }
 
-    std::filesystem::path   m_root;
-    UP<CRealmManager>       m_manager;
-    UP<CRealmWindowManager> m_windowManager;
-    UP<CRealmControlServer> m_server;
+    std::filesystem::path            m_root;
+    UP<CRealmManager>                m_manager;
+    UP<CRealmInputControllerManager> m_inputController;
+    UP<CRealmWindowManager>          m_windowManager;
+    UP<CRealmControlServer>          m_server;
 };
 
 TEST_F(CRealmControlServerTest, rejectsMalformedAndAmbiguousRequestsWithStructuredErrors) {
@@ -182,6 +215,75 @@ TEST_F(CRealmControlServerTest, exposesEveryInitialRealmMethod) {
     response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"10","method":"realm.destroy","params":{"realm":"codex"}})");
     EXPECT_TRUE(response.contains(R"("action":"destroyed")"));
     EXPECT_FALSE(m_manager->realmByName("codex"));
+}
+
+TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
+    ASSERT_TRUE(m_manager->createRealm("input"));
+    const auto realm = m_manager->realmByName("input");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm)) << m_inputController->controllerError(realm->id());
+
+    auto response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                        R"({"request_id":"1","method":"keyboard.type","params":{"realm":"input","text":"echo realm\n"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    EXPECT_TRUE(response.contains(R"("action":"queued")"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "KEYBOARD_TYPE"));
+
+    ASSERT_TRUE(m_windowManager->associateWindow(42, realm->compositorPID()));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"2","method":"realm.takeover","params":{"realm":"input"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "RELEASE_ALL"));
+
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"3","method":"pointer.move","params":{"realm":"input","x":10,"y":20}})");
+    EXPECT_TRUE(response.contains(R"("code":"input_denied")"));
+
+    ASSERT_TRUE(m_windowManager->releaseRealm(realm->id()));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"4","method":"pointer.move","params":{"realm":"input","x":10,"y":20}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_MOVE"));
+
+    ASSERT_TRUE(m_manager->stopRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::STOPPED));
+    EXPECT_FALSE(m_inputController->controllerReady(realm->id()));
+}
+
+TEST_F(CRealmControlServerTest, validatesInputShapesAndBoundsBeforeRouting) {
+    ASSERT_TRUE(m_manager->createRealm("validation"));
+
+    EXPECT_TRUE(
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"1","method":"pointer.move","params":{"realm":"validation","x":1280,"y":0}})")
+            .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                    R"({"request_id":"2","method":"pointer.button","params":{"realm":"validation","button":"side","pressed":true}})")
+                    .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                    R"({"request_id":"3","method":"pointer.scroll","params":{"realm":"validation","axis":"vertical","steps":0}})")
+                    .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"4","method":"keyboard.type","params":{"realm":"validation","text":""}})")
+            .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"5","method":"realm.info","params":{"realm":"validation","x":1}})")
+                    .contains(R"("code":"invalid_params")"));
+}
+
+TEST_F(CRealmControlServerTest, rateLimitsInputWithoutConsumingTheBurstOnRejection) {
+    ASSERT_TRUE(m_manager->createRealm("limited"));
+    const auto realm = m_manager->realmByName("limited");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+
+    const auto oversizedBurst = std::string(513, 'x');
+    const auto rejected       = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                                    std::format(R"({{"request_id":"1","method":"keyboard.type","params":{{"realm":"limited","text":"{}"}}}})", oversizedBurst));
+    EXPECT_TRUE(rejected.contains(R"("code":"rate_limited")"));
+
+    const auto accepted = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                              R"({"request_id":"2","method":"keyboard.key","params":{"realm":"limited","keycode":30,"pressed":true}})");
+    EXPECT_TRUE(accepted.contains(R"("ok":true)"));
 }
 
 TEST_F(CRealmControlServerTest, createsPrivateSocketAndRemovesItOnShutdown) {

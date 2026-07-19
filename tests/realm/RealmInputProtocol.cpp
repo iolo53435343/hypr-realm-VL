@@ -1,0 +1,77 @@
+#include <realm/RealmInputProtocol.hpp>
+
+#include <gtest/gtest.h>
+
+#include <array>
+#include <string>
+
+using namespace Realm;
+
+TEST(RealmInputProtocol, roundTripsEveryCommandShape) {
+    const std::array messages = {
+        SRealmInputMessage{.type = eRealmInputMessageType::READY},
+        SRealmInputMessage{.type = eRealmInputMessageType::ERROR, .sequence = 2, .text = "failure"},
+        SRealmInputMessage{.type = eRealmInputMessageType::RELEASE_ALL, .sequence = 3},
+        SRealmInputMessage{.type = eRealmInputMessageType::POINTER_MOVE, .sequence = 4, .x = 12, .y = 34, .width = 1280, .height = 720},
+        SRealmInputMessage{.type = eRealmInputMessageType::POINTER_BUTTON, .sequence = 5, .code = 272, .pressed = true},
+        SRealmInputMessage{.type = eRealmInputMessageType::POINTER_SCROLL, .sequence = 6, .horizontal = -2, .vertical = 3},
+        SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_KEY, .sequence = 7, .code = 30, .pressed = true},
+        SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_TYPE, .sequence = 8, .text = "echo realm\n"},
+    };
+
+    for (const auto& message : messages) {
+        auto encoded = encodeRealmInputMessage(message);
+        ASSERT_TRUE(encoded) << encoded.error();
+        auto decoded = decodeRealmInputMessage(encoded->data(), encoded->size());
+        ASSERT_TRUE(decoded) << decoded.error();
+        EXPECT_EQ(decoded->type, message.type);
+        EXPECT_EQ(decoded->sequence, message.sequence);
+        EXPECT_EQ(decoded->x, message.x);
+        EXPECT_EQ(decoded->y, message.y);
+        EXPECT_EQ(decoded->width, message.width);
+        EXPECT_EQ(decoded->height, message.height);
+        EXPECT_EQ(decoded->code, message.code);
+        EXPECT_EQ(decoded->horizontal, message.horizontal);
+        EXPECT_EQ(decoded->vertical, message.vertical);
+        EXPECT_EQ(decoded->pressed, message.pressed);
+        EXPECT_EQ(decoded->text, message.text);
+    }
+}
+
+TEST(RealmInputProtocol, rejectsMalformedAndOversizedPackets) {
+    EXPECT_FALSE(decodeRealmInputMessage(nullptr, 0));
+
+    auto packet = encodeRealmInputMessage(SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_TYPE, .text = "hello"});
+    ASSERT_TRUE(packet);
+    EXPECT_FALSE(decodeRealmInputMessage(packet->data(), packet->size() - 1));
+
+    auto badMagic = *packet;
+    badMagic[0]   = 0;
+    EXPECT_FALSE(decodeRealmInputMessage(badMagic.data(), badMagic.size()));
+
+    auto badVersion = *packet;
+    badVersion[5]   = 2;
+    EXPECT_FALSE(decodeRealmInputMessage(badVersion.data(), badVersion.size()));
+
+    auto badType = *packet;
+    badType[6]   = 0x7F;
+    badType[7]   = 0xFF;
+    EXPECT_FALSE(decodeRealmInputMessage(badType.data(), badType.size()));
+
+    EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
+        .type = eRealmInputMessageType::KEYBOARD_TYPE,
+        .text = std::string(REALM_INPUT_MAX_TEXT_SIZE + 1, 'x'),
+    }));
+    EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
+        .type   = eRealmInputMessageType::POINTER_MOVE,
+        .x      = 1280,
+        .y      = 0,
+        .width  = 1280,
+        .height = 720,
+    }));
+}
+
+TEST(RealmInputProtocol, chargesTypedTextBySize) {
+    EXPECT_EQ(realmInputEventCost(SRealmInputMessage{.type = eRealmInputMessageType::POINTER_MOVE}), 1);
+    EXPECT_EQ(realmInputEventCost(SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_TYPE, .text = "realm"}), 5);
+}

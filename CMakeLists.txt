@@ -612,6 +612,51 @@ protocolnew("${HYPRLAND_PROTOCOLS}/protocols" "hyprland-input-capture-v1"
             true)
 protocolwayland()
 
+find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
+pkg_check_modules(realm_controller_deps REQUIRED IMPORTED_TARGET wayland-client
+                  xkbcommon)
+
+set(REALM_CONTROLLER_PROTOCOL_DIR
+    "${CMAKE_CURRENT_BINARY_DIR}/realm-agent-controller-protocols")
+set(REALM_CONTROLLER_PROTOCOL_SOURCES "")
+
+function(realm_client_protocol protoName)
+  set(protoXml "${CMAKE_CURRENT_SOURCE_DIR}/protocols/${protoName}.xml")
+  set(protoHeader
+      "${REALM_CONTROLLER_PROTOCOL_DIR}/${protoName}-client-protocol.h")
+  set(protoCode
+      "${REALM_CONTROLLER_PROTOCOL_DIR}/${protoName}-protocol.c")
+  add_custom_command(
+    OUTPUT "${protoHeader}" "${protoCode}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${REALM_CONTROLLER_PROTOCOL_DIR}"
+    COMMAND ${WAYLAND_SCANNER_EXECUTABLE} client-header "${protoXml}"
+            "${protoHeader}"
+    COMMAND ${WAYLAND_SCANNER_EXECUTABLE} private-code "${protoXml}"
+            "${protoCode}"
+    DEPENDS "${protoXml}"
+    VERBATIM)
+  list(APPEND REALM_CONTROLLER_PROTOCOL_SOURCES "${protoHeader}" "${protoCode}")
+  set(REALM_CONTROLLER_PROTOCOL_SOURCES
+      "${REALM_CONTROLLER_PROTOCOL_SOURCES}"
+      PARENT_SCOPE)
+endfunction()
+
+realm_client_protocol("virtual-keyboard-unstable-v1")
+realm_client_protocol("wlr-virtual-pointer-unstable-v1")
+
+add_executable(
+  hyprland-realm-agent-controller
+  tools/realm-agent-controller/main.cpp
+  tools/realm-agent-controller/WaylandInput.cpp
+  src/realm/RealmInputProtocol.cpp
+  ${REALM_CONTROLLER_PROTOCOL_SOURCES})
+target_include_directories(hyprland-realm-agent-controller
+                           PRIVATE "${REALM_CONTROLLER_PROTOCOL_DIR}"
+                                   ${realm_controller_deps_INCLUDE_DIRS})
+target_link_libraries(hyprland-realm-agent-controller
+                      PRIVATE PkgConfig::realm_controller_deps)
+
 # tools
 add_subdirectory(hyprctl)
 add_subdirectory(start)
@@ -629,8 +674,8 @@ set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     GROUP_READ GROUP_EXECUTE
     WORLD_READ WORLD_EXECUTE)
 
-# binary and symlink
-install(TARGETS Hyprland)
+# binaries and symlink
+install(TARGETS Hyprland hyprland-realm-agent-controller)
 
 install(
   CODE "execute_process( \
@@ -704,11 +749,20 @@ if(BUILD_TESTING OR WITH_TESTS)
   include(GoogleTest)
   file(GLOB_RECURSE TESTFILES "tests/*.cpp")
   add_executable(realm_process_helper tests/realm/RealmProcessHelper.cc)
+  add_executable(
+    realm_input_controller_process_helper
+    tests/realm/RealmInputControllerProcessHelper.cc
+    src/realm/RealmInputProtocol.cpp)
+  target_include_directories(realm_input_controller_process_helper
+                             PRIVATE "./src")
   add_executable(hyprland_gtests ${TESTFILES})
-  add_dependencies(hyprland_gtests realm_process_helper)
+  add_dependencies(hyprland_gtests realm_process_helper
+                   realm_input_controller_process_helper)
   target_compile_definitions(
     hyprland_gtests
-    PRIVATE REALM_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_process_helper>")
+    PRIVATE
+      REALM_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_process_helper>"
+      REALM_INPUT_CONTROLLER_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_input_controller_process_helper>")
   target_compile_options(hyprland_gtests PRIVATE --coverage)
   target_link_options(hyprland_gtests PRIVATE --coverage)
   target_include_directories(
