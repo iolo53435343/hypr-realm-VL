@@ -59,6 +59,7 @@ namespace Realm {
 
         SP<CRealm>                             realmByID(uint64_t id) const;
         SP<CRealm>                             realmByName(const std::string& name) const;
+        SP<CRealm>                             realmByPID(pid_t pid) const;
         const std::vector<SP<CRealm>>&         realms() const;
 
         void                                   dispatchPendingEvents();

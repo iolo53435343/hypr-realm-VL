@@ -2945,8 +2945,11 @@ bool CWindow::canBeGroupedInto(SP<CGroup> group) {
 }
 
 void CWindow::sendClose() {
-    if (m_isMapped)
-        g_pXWaylandManager->sendCloseWindow(m_self.lock());
+    if (!m_isMapped)
+        return;
+
+    Event::bus()->m_events.window.requestClose.emit(m_self.lock());
+    g_pXWaylandManager->sendCloseWindow(m_self.lock());
 }
 
 Types::CMultiAVarContainer<float, uint8_t>& CWindow::alpha() {

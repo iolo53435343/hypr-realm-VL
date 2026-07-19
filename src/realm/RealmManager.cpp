@@ -938,6 +938,14 @@ SP<CRealm> CRealmManager::realmByName(const std::string& name) const {
     return realm == m_realms.end() ? SP<CRealm>{} : *realm;
 }
 
+SP<CRealm> CRealmManager::realmByPID(pid_t pid) const {
+    if (pid <= 1)
+        return {};
+
+    const auto realm = std::ranges::find(m_realms, pid, &CRealm::compositorPID);
+    return realm == m_realms.end() ? SP<CRealm>{} : *realm;
+}
+
 const std::vector<SP<CRealm>>& CRealmManager::realms() const {
     return m_realms;
 }

@@ -80,6 +80,7 @@ namespace Event {
                 Event<PHLWINDOW>                        openLate;
                 Event<PHLWINDOWREF>                     destroy;
                 Event<PHLWINDOW>                        close;
+                Event<PHLWINDOW>                        requestClose;
                 Event<PHLWINDOW>                        kill;
                 Event<PHLWINDOW, Desktop::eFocusReason> active;
                 Event<PHLWINDOW>                        urgent;
