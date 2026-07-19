@@ -26,6 +26,13 @@ namespace Realm {
 
     std::string_view realmInputOwnerName(eRealmInputOwner owner);
 
+    enum class eRealmObservationPermission : uint8_t {
+        DENIED = 0,
+        ALLOWED,
+    };
+
+    std::string_view realmObservationPermissionName(eRealmObservationPermission permission);
+
     class CRealm {
       public:
         CRealm(uint64_t id, std::string name);
@@ -40,20 +47,22 @@ namespace Realm {
         const std::string&               logPath() const;
         int                              exitCode() const;
         eRealmInputOwner                 inputOwner() const;
+        eRealmObservationPermission      observationPermission() const;
 
         std::expected<void, std::string> transitionTo(eRealmState state);
 
       private:
-        uint64_t         m_id = 0;
-        std::string      m_name;
-        eRealmState      m_state         = eRealmState::STOPPED;
-        pid_t            m_compositorPID = 0;
-        std::string      m_runtimeDirectory;
-        std::string      m_waylandSocket;
-        std::string      m_configPath;
-        std::string      m_logPath;
-        int              m_exitCode   = -1;
-        eRealmInputOwner m_inputOwner = eRealmInputOwner::NONE;
+        uint64_t                    m_id = 0;
+        std::string                 m_name;
+        eRealmState                 m_state         = eRealmState::STOPPED;
+        pid_t                       m_compositorPID = 0;
+        std::string                 m_runtimeDirectory;
+        std::string                 m_waylandSocket;
+        std::string                 m_configPath;
+        std::string                 m_logPath;
+        int                         m_exitCode              = -1;
+        eRealmInputOwner            m_inputOwner            = eRealmInputOwner::NONE;
+        eRealmObservationPermission m_observationPermission = eRealmObservationPermission::DENIED;
 
         friend class CRealmManager;
     };

@@ -4,11 +4,13 @@
 #include <cerrno>
 #include <charconv>
 #include <csignal>
+#include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <poll.h>
 #include <string_view>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 using namespace Realm;
@@ -37,8 +39,64 @@ static const char* messageName(eRealmInputMessageType type) {
         case eRealmInputMessageType::POINTER_SCROLL: return "POINTER_SCROLL";
         case eRealmInputMessageType::KEYBOARD_KEY: return "KEYBOARD_KEY";
         case eRealmInputMessageType::KEYBOARD_TYPE: return "KEYBOARD_TYPE";
+        case eRealmInputMessageType::CAPTURE: return "CAPTURE";
+        case eRealmInputMessageType::CAPTURE_REGION: return "CAPTURE_REGION";
+        case eRealmInputMessageType::CAPTURE_READY: return "CAPTURE_READY";
+        case eRealmInputMessageType::CAPTURE_CANCEL: return "CAPTURE_CANCEL";
     }
     return "UNKNOWN";
+}
+
+static bool sendCapture(int controlFD, uint32_t sequence) {
+#if defined(SYS_memfd_create)
+    const auto frameFD = static_cast<int>(syscall(SYS_memfd_create, "realm-test-frame", 0));
+#else
+    const auto frameFD = -1;
+#endif
+    if (frameFD < 0 || ftruncate(frameFD, 16) < 0) {
+        if (frameFD >= 0)
+            close(frameFD);
+        return false;
+    }
+
+    constexpr std::array<uint8_t, 16> PIXELS = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    };
+    if (pwrite(frameFD, PIXELS.data(), PIXELS.size(), 0) != static_cast<ssize_t>(PIXELS.size())) {
+        close(frameFD);
+        return false;
+    }
+
+    auto packet = encodeRealmInputMessage(SRealmInputMessage{
+        .type     = eRealmInputMessageType::CAPTURE_READY,
+        .sequence = sequence,
+        .width    = 2,
+        .height   = 2,
+        .format   = REALM_CAPTURE_FORMAT_XRGB8888,
+        .stride   = 8,
+        .byteSize = 16,
+    });
+    if (!packet) {
+        close(frameFD);
+        return false;
+    }
+
+    iovec                                     iov{.iov_base = packet->data(), .iov_len = packet->size()};
+    std::array<char, CMSG_SPACE(sizeof(int))> ancillary{};
+    msghdr                                    header{
+                                           .msg_iov        = &iov,
+                                           .msg_iovlen     = 1,
+                                           .msg_control    = ancillary.data(),
+                                           .msg_controllen = ancillary.size(),
+    };
+    auto* control       = CMSG_FIRSTHDR(&header);
+    control->cmsg_level = SOL_SOCKET;
+    control->cmsg_type  = SCM_RIGHTS;
+    control->cmsg_len   = CMSG_LEN(sizeof(int));
+    std::memcpy(CMSG_DATA(control), &frameFD, sizeof(frameFD));
+    const auto sent = sendmsg(controlFD, &header, MSG_NOSIGNAL);
+    close(frameFD);
+    return sent == static_cast<ssize_t>(packet->size());
 }
 
 int main(int argc, char** argv) {
@@ -75,6 +133,8 @@ int main(int argc, char** argv) {
         if (!message)
             return 5;
         std::cout << messageName(message->type) << ' ' << message->sequence << '\n' << std::flush;
+        if ((message->type == eRealmInputMessageType::CAPTURE || message->type == eRealmInputMessageType::CAPTURE_REGION) && !sendCapture(controlFD, message->sequence))
+            return 6;
     }
 
     close(waylandFD);

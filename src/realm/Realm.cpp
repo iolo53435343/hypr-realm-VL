@@ -28,6 +28,15 @@ std::string_view Realm::realmInputOwnerName(eRealmInputOwner owner) {
     return "unknown";
 }
 
+std::string_view Realm::realmObservationPermissionName(eRealmObservationPermission permission) {
+    switch (permission) {
+        case eRealmObservationPermission::DENIED: return "denied";
+        case eRealmObservationPermission::ALLOWED: return "allowed";
+    }
+
+    return "unknown";
+}
+
 CRealm::CRealm(uint64_t id, std::string name) : m_id(id), m_name(std::move(name)) {
     ;
 }
@@ -70,6 +79,10 @@ int CRealm::exitCode() const {
 
 eRealmInputOwner CRealm::inputOwner() const {
     return m_inputOwner;
+}
+
+eRealmObservationPermission CRealm::observationPermission() const {
+    return m_observationPermission;
 }
 
 std::expected<void, std::string> CRealm::transitionTo(eRealmState state) {

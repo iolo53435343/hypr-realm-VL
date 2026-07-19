@@ -27,6 +27,7 @@ namespace Realm {
         SP<SHyprCtlCommand>  m_realmsCommand;
         SP<SHyprCtlCommand>  m_realmCommand;
         CHyprSignalListener  m_lifecycleListener;
+        CHyprSignalListener  m_observationListener;
     };
 
     UP<CRealmIPC>& ipc();

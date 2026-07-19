@@ -504,6 +504,15 @@ void CRealmManager::setInputOwner(const SP<CRealm>& realm, eRealmInputOwner owne
     m_events.inputOwner.emit(SRealmInputOwnerEvent{.realm = realm, .previous = previous, .owner = owner});
 }
 
+void CRealmManager::setObservationPermission(const SP<CRealm>& realm, eRealmObservationPermission permission) {
+    if (!realm || realm->m_observationPermission == permission)
+        return;
+
+    const auto previous            = realm->m_observationPermission;
+    realm->m_observationPermission = permission;
+    m_events.observationPermission.emit(SRealmObservationPermissionEvent{.realm = realm, .previous = previous, .permission = permission});
+}
+
 std::expected<void, std::string> CRealmManager::validateName(const std::string& name) const {
     if (name.empty())
         return std::unexpected("realm name cannot be empty");
@@ -667,6 +676,7 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
         return transition;
 
     setInputOwner(realm, eRealmInputOwner::NONE);
+    setObservationPermission(realm, eRealmObservationPermission::DENIED);
     realm->m_exitCode = -1;
     if (const auto prepared = prepareRuntime(*realm); !prepared) {
         if (realm->transitionTo(eRealmState::FAILED))
@@ -798,8 +808,10 @@ std::expected<void, std::string> CRealmManager::stopRealm(uint64_t id) {
 
     process->second.terminationDeadline = std::chrono::steady_clock::now() + m_options.stopTimeout;
     auto transition                     = realm->transitionTo(eRealmState::STOPPING);
-    if (transition)
+    if (transition) {
         setInputOwner(realm, eRealmInputOwner::NONE);
+        setObservationPermission(realm, eRealmObservationPermission::DENIED);
+    }
     return transition;
 }
 
@@ -821,6 +833,7 @@ std::expected<void, std::string> CRealmManager::killRealm(uint64_t id) {
     }
 
     setInputOwner(realm, eRealmInputOwner::NONE);
+    setObservationPermission(realm, eRealmObservationPermission::DENIED);
     process->second.forceKillSent       = true;
     process->second.terminationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     return {};
@@ -854,6 +867,30 @@ std::expected<void, std::string> CRealmManager::releaseRealm(uint64_t id) {
     return {};
 }
 
+std::expected<void, std::string> CRealmManager::allowObservation(uint64_t id) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->state() != eRealmState::RUNNING)
+        return std::unexpected(std::format("realm '{}' observation cannot be allowed while {}", realm->name(), realmStateName(realm->state())));
+    if (realm->observationPermission() == eRealmObservationPermission::ALLOWED)
+        return std::unexpected(std::format("realm '{}' observation is already allowed", realm->name()));
+
+    setObservationPermission(realm, eRealmObservationPermission::ALLOWED);
+    return {};
+}
+
+std::expected<void, std::string> CRealmManager::denyObservation(uint64_t id) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->observationPermission() == eRealmObservationPermission::DENIED)
+        return std::unexpected(std::format("realm '{}' observation is already denied", realm->name()));
+
+    setObservationPermission(realm, eRealmObservationPermission::DENIED);
+    return {};
+}
+
 void CRealmManager::handleProcessExit(CRealm& realm, SRealmProcess& process, int exitCode) {
     if (process.exitReceived)
         return;
@@ -866,6 +903,7 @@ void CRealmManager::handleProcessExit(CRealm& realm, SRealmProcess& process, int
 
     auto realmPointer = realmByID(realm.id());
     setInputOwner(realmPointer, eRealmInputOwner::NONE);
+    setObservationPermission(realmPointer, eRealmObservationPermission::DENIED);
     signalProcessGroup(process, SIGTERM);
 
     if (realm.state() == eRealmState::STOPPING && !process.failOnExit) {
@@ -1068,6 +1106,7 @@ void CRealmManager::shutdownAll() {
         if (realm && (realm->state() == eRealmState::CREATING || realm->state() == eRealmState::RUNNING || realm->state() == eRealmState::PAUSED)) {
             realm->transitionTo(eRealmState::STOPPING);
             setInputOwner(realm, eRealmInputOwner::NONE);
+            setObservationPermission(realm, eRealmObservationPermission::DENIED);
         }
     }
 

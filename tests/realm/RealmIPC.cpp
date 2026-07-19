@@ -119,6 +119,10 @@ TEST_F(CRealmIPCTest, controlsFullLifecycle) {
     EXPECT_TRUE(started.contains(R"("state":"creating")"));
     ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
     EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm observe lifecycle").starts_with("observation allowed for realm"));
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm unobserve lifecycle").starts_with("observation denied for realm"));
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
 
     const auto noWindow = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm takeover lifecycle");
     EXPECT_TRUE(noWindow.contains("has no host window"));
@@ -145,5 +149,5 @@ TEST_F(CRealmIPCTest, formatsLifecycleEventDataAsEscapedJSON) {
     ASSERT_TRUE(created);
 
     EXPECT_EQ(realmLifecycleEventData(SRealmLifecycleEvent{.type = eRealmLifecycleEvent::CREATED, .realm = *created}),
-              R"({"id":1,"name":"quoted\"realm","state":"stopped","input_owner":"none"})");
+              R"({"id":1,"name":"quoted\"realm","state":"stopped","input_owner":"none","observation_permission":"denied"})");
 }

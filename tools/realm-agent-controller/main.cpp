@@ -7,6 +7,7 @@
 #include <charconv>
 #include <csignal>
 #include <cstring>
+#include <deque>
 #include <expected>
 #include <fcntl.h>
 #include <format>
@@ -35,24 +36,74 @@ static std::expected<int, std::string> parseFD(std::string_view value) {
     return fd;
 }
 
-static bool sendStatus(int controlFD, const SRealmInputMessage& message) {
+static ssize_t sendStatus(int controlFD, const SRealmInputMessage& message, int frameFD = -1) {
     auto packet = encodeRealmInputMessage(message);
     if (!packet)
-        return false;
+        return -1;
 
-    const auto sent = send(controlFD, packet->data(), packet->size(), MSG_DONTWAIT | MSG_NOSIGNAL);
-    return sent >= 0 && static_cast<size_t>(sent) == packet->size();
+    if (frameFD < 0)
+        return send(controlFD, packet->data(), packet->size(), MSG_DONTWAIT | MSG_NOSIGNAL);
+
+    iovec iov{
+        .iov_base = packet->data(),
+        .iov_len  = packet->size(),
+    };
+    std::array<char, CMSG_SPACE(sizeof(int))> ancillary{};
+    msghdr                                    header{
+                                           .msg_iov        = &iov,
+                                           .msg_iovlen     = 1,
+                                           .msg_control    = ancillary.data(),
+                                           .msg_controllen = ancillary.size(),
+    };
+    auto* control       = CMSG_FIRSTHDR(&header);
+    control->cmsg_level = SOL_SOCKET;
+    control->cmsg_type  = SCM_RIGHTS;
+    control->cmsg_len   = CMSG_LEN(sizeof(int));
+    std::memcpy(CMSG_DATA(control), &frameFD, sizeof(frameFD));
+    return sendmsg(controlFD, &header, MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
 static bool sendError(int controlFD, uint32_t sequence, std::string message) {
     if (message.size() > REALM_INPUT_MAX_TEXT_SIZE)
         message.resize(REALM_INPUT_MAX_TEXT_SIZE);
-    return sendStatus(controlFD,
-                      SRealmInputMessage{
-                          .type     = eRealmInputMessageType::ERROR,
-                          .sequence = sequence,
-                          .text     = std::move(message),
-                      });
+    const auto status = SRealmInputMessage{
+        .type     = eRealmInputMessageType::ERROR,
+        .sequence = sequence,
+        .text     = std::move(message),
+    };
+    auto packet = encodeRealmInputMessage(status);
+    if (!packet)
+        return false;
+    return sendStatus(controlFD, status) == static_cast<ssize_t>(packet->size());
+}
+
+static void queueCaptureResults(CWaylandInput& input, std::deque<SWaylandCaptureResult>& outgoing) {
+    for (auto& result : input.takeCaptureResults()) {
+        if (!result.error.empty())
+            result.message = SRealmInputMessage{
+                .type     = eRealmInputMessageType::ERROR,
+                .sequence = result.sequence,
+                .text     = std::move(result.error),
+            };
+        outgoing.emplace_back(std::move(result));
+    }
+}
+
+static bool flushCaptureResults(int controlFD, std::deque<SWaylandCaptureResult>& outgoing) {
+    while (!outgoing.empty()) {
+        auto packet = encodeRealmInputMessage(outgoing.front().message);
+        if (!packet)
+            return false;
+        const auto sent = sendStatus(controlFD, outgoing.front().message, outgoing.front().frameFD);
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return true;
+        if (sent < 0 || static_cast<size_t>(sent) != packet->size())
+            return false;
+        if (const auto frameFD = outgoing.front().releaseFrameFD(); frameFD >= 0)
+            close(frameFD);
+        outgoing.pop_front();
+    }
+    return true;
 }
 
 int main(int argc, char** argv) {
@@ -82,12 +133,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!sendStatus(*controlFD, SRealmInputMessage{.type = eRealmInputMessageType::READY}))
+    const auto ready       = SRealmInputMessage{.type = eRealmInputMessageType::READY};
+    const auto readyPacket = encodeRealmInputMessage(ready);
+    if (!readyPacket || sendStatus(*controlFD, ready) != static_cast<ssize_t>(readyPacket->size()))
         return 1;
 
+    std::deque<SWaylandCaptureResult> outgoing;
     while (!EXIT_REQUESTED) {
+        if (!flushCaptureResults(*controlFD, outgoing))
+            break;
         std::array<pollfd, 2> descriptors = {
-            pollfd{.fd = *controlFD, .events = POLLIN},
+            pollfd{.fd = *controlFD, .events = static_cast<short>(POLLIN | (outgoing.empty() ? 0 : POLLOUT))},
             pollfd{.fd = input.displayFD(), .events = POLLIN},
         };
         int result = 0;
@@ -108,6 +164,7 @@ int main(int argc, char** argv) {
                 std::cerr << dispatched.error() << '\n';
                 break;
             }
+            queueCaptureResults(input, outgoing);
         }
 
         if (descriptors[0].revents & (POLLERR | POLLNVAL))
@@ -120,11 +177,17 @@ int main(int argc, char** argv) {
 
             auto message = decodeRealmInputMessage(packet.data(), static_cast<size_t>(received));
             if (!message) {
-                sendError(*controlFD, 0, message.error());
+                SWaylandCaptureResult error;
+                error.message = SRealmInputMessage{.type = eRealmInputMessageType::ERROR, .text = message.error()};
+                outgoing.emplace_back(std::move(error));
                 continue;
             }
-            if (const auto handled = input.handle(*message); !handled)
-                sendError(*controlFD, message->sequence, handled.error());
+            if (const auto handled = input.handle(*message); !handled) {
+                SWaylandCaptureResult error;
+                error.message = SRealmInputMessage{.type = eRealmInputMessageType::ERROR, .sequence = message->sequence, .text = handled.error()};
+                outgoing.emplace_back(std::move(error));
+            }
+            queueCaptureResults(input, outgoing);
         }
         if (descriptors[0].revents & POLLHUP)
             break;

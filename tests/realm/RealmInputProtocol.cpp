@@ -17,6 +17,10 @@ TEST(RealmInputProtocol, roundTripsEveryCommandShape) {
         SRealmInputMessage{.type = eRealmInputMessageType::POINTER_SCROLL, .sequence = 6, .horizontal = -2, .vertical = 3},
         SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_KEY, .sequence = 7, .code = 30, .pressed = true},
         SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_TYPE, .sequence = 8, .text = "echo realm\n"},
+        SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE, .sequence = 9},
+        SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_REGION, .sequence = 10, .x = 10, .y = 20, .width = 300, .height = 200},
+        SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_READY, .sequence = 10, .width = 300, .height = 200, .format = 1, .stride = 1200, .flags = 1, .byteSize = 240000},
+        SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_CANCEL, .sequence = 10},
     };
 
     for (const auto& message : messages) {
@@ -34,6 +38,10 @@ TEST(RealmInputProtocol, roundTripsEveryCommandShape) {
         EXPECT_EQ(decoded->horizontal, message.horizontal);
         EXPECT_EQ(decoded->vertical, message.vertical);
         EXPECT_EQ(decoded->pressed, message.pressed);
+        EXPECT_EQ(decoded->format, message.format);
+        EXPECT_EQ(decoded->stride, message.stride);
+        EXPECT_EQ(decoded->flags, message.flags);
+        EXPECT_EQ(decoded->byteSize, message.byteSize);
         EXPECT_EQ(decoded->text, message.text);
     }
 }
@@ -63,12 +71,42 @@ TEST(RealmInputProtocol, rejectsMalformedAndOversizedPackets) {
         .text = std::string(REALM_INPUT_MAX_TEXT_SIZE + 1, 'x'),
     }));
     EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
+        .type   = eRealmInputMessageType::CAPTURE_REGION,
+        .x      = 1200,
+        .y      = 0,
+        .width  = 100,
+        .height = 100,
+    }));
+    EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
+        .type     = eRealmInputMessageType::CAPTURE_READY,
+        .width    = 2,
+        .height   = 2,
+        .stride   = 8,
+        .byteSize = 15,
+    }));
+    EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
+        .type     = eRealmInputMessageType::CAPTURE_READY,
+        .width    = 2,
+        .height   = 2,
+        .format   = 99,
+        .stride   = 8,
+        .byteSize = 16,
+    }));
+    EXPECT_FALSE(encodeRealmInputMessage(SRealmInputMessage{
         .type   = eRealmInputMessageType::POINTER_MOVE,
         .x      = 1280,
         .y      = 0,
         .width  = 1280,
         .height = 720,
     }));
+}
+
+TEST(RealmInputProtocol, classifiesInputAndCaptureCommandsSeparately) {
+    EXPECT_TRUE(realmInputMessageIsInputCommand(eRealmInputMessageType::KEYBOARD_TYPE));
+    EXPECT_FALSE(realmInputMessageIsInputCommand(eRealmInputMessageType::CAPTURE));
+    EXPECT_TRUE(realmInputMessageIsCaptureCommand(eRealmInputMessageType::CAPTURE));
+    EXPECT_TRUE(realmInputMessageIsCaptureCommand(eRealmInputMessageType::CAPTURE_REGION));
+    EXPECT_FALSE(realmInputMessageIsCaptureCommand(eRealmInputMessageType::CAPTURE_READY));
 }
 
 TEST(RealmInputProtocol, chargesTypedTextBySize) {

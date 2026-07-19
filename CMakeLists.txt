@@ -644,6 +644,7 @@ endfunction()
 
 realm_client_protocol("virtual-keyboard-unstable-v1")
 realm_client_protocol("wlr-virtual-pointer-unstable-v1")
+realm_client_protocol("wlr-screencopy-unstable-v1")
 
 add_executable(
   hyprland-realm-agent-controller

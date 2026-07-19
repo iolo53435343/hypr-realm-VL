@@ -23,12 +23,21 @@ static void appendUint32(std::vector<uint8_t>& output, uint32_t value) {
     output.emplace_back(static_cast<uint8_t>(value & 0xFF));
 }
 
+static void appendUint64(std::vector<uint8_t>& output, uint64_t value) {
+    appendUint32(output, static_cast<uint32_t>(value >> 32));
+    appendUint32(output, static_cast<uint32_t>(value & 0xFFFFFFFF));
+}
+
 static uint16_t readUint16(const uint8_t* data) {
     return (static_cast<uint16_t>(data[0]) << 8) | static_cast<uint16_t>(data[1]);
 }
 
 static uint32_t readUint32(const uint8_t* data) {
     return (static_cast<uint32_t>(data[0]) << 24) | (static_cast<uint32_t>(data[1]) << 16) | (static_cast<uint32_t>(data[2]) << 8) | static_cast<uint32_t>(data[3]);
+}
+
+static uint64_t readUint64(const uint8_t* data) {
+    return (static_cast<uint64_t>(readUint32(data)) << 32) | readUint32(data + 4);
 }
 
 static bool isKnownType(eRealmInputMessageType type) {
@@ -40,7 +49,11 @@ static bool isKnownType(eRealmInputMessageType type) {
         case eRealmInputMessageType::POINTER_BUTTON:
         case eRealmInputMessageType::POINTER_SCROLL:
         case eRealmInputMessageType::KEYBOARD_KEY:
-        case eRealmInputMessageType::KEYBOARD_TYPE: return true;
+        case eRealmInputMessageType::KEYBOARD_TYPE:
+        case eRealmInputMessageType::CAPTURE:
+        case eRealmInputMessageType::CAPTURE_REGION:
+        case eRealmInputMessageType::CAPTURE_READY:
+        case eRealmInputMessageType::CAPTURE_CANCEL: return true;
     }
 
     return false;
@@ -51,7 +64,9 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
 
     switch (message.type) {
         case eRealmInputMessageType::READY:
-        case eRealmInputMessageType::RELEASE_ALL: break;
+        case eRealmInputMessageType::RELEASE_ALL:
+        case eRealmInputMessageType::CAPTURE:
+        case eRealmInputMessageType::CAPTURE_CANCEL: break;
         case eRealmInputMessageType::ERROR:
         case eRealmInputMessageType::KEYBOARD_TYPE: {
             if (message.text.size() > REALM_INPUT_MAX_TEXT_SIZE)
@@ -68,6 +83,16 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
             appendUint32(payload, message.height);
             break;
         }
+        case eRealmInputMessageType::CAPTURE_REGION: {
+            if (message.width == 0 || message.height == 0 || message.x >= REALM_INPUT_OUTPUT_WIDTH || message.y >= REALM_INPUT_OUTPUT_HEIGHT ||
+                message.width > REALM_INPUT_OUTPUT_WIDTH - message.x || message.height > REALM_INPUT_OUTPUT_HEIGHT - message.y)
+                return std::unexpected("capture region must be inside the realm output");
+            appendUint32(payload, message.x);
+            appendUint32(payload, message.y);
+            appendUint32(payload, message.width);
+            appendUint32(payload, message.height);
+            break;
+        }
         case eRealmInputMessageType::POINTER_BUTTON:
         case eRealmInputMessageType::KEYBOARD_KEY: {
             appendUint32(payload, message.code);
@@ -77,6 +102,19 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
         case eRealmInputMessageType::POINTER_SCROLL: {
             appendUint32(payload, static_cast<uint32_t>(message.horizontal));
             appendUint32(payload, static_cast<uint32_t>(message.vertical));
+            break;
+        }
+        case eRealmInputMessageType::CAPTURE_READY: {
+            if ((message.format != REALM_CAPTURE_FORMAT_ARGB8888 && message.format != REALM_CAPTURE_FORMAT_XRGB8888) || message.width == 0 || message.height == 0 ||
+                message.width > REALM_INPUT_OUTPUT_WIDTH || message.height > REALM_INPUT_OUTPUT_HEIGHT || message.stride < message.width * 4ULL || message.byteSize == 0 ||
+                message.byteSize > REALM_CAPTURE_MAX_BYTES || message.byteSize != static_cast<uint64_t>(message.stride) * message.height)
+                return std::unexpected("capture metadata does not describe a valid bounded frame");
+            appendUint32(payload, message.format);
+            appendUint32(payload, message.width);
+            appendUint32(payload, message.height);
+            appendUint32(payload, message.stride);
+            appendUint32(payload, message.flags);
+            appendUint64(payload, message.byteSize);
             break;
         }
     }
@@ -132,6 +170,8 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
     switch (type) {
         case eRealmInputMessageType::READY:
         case eRealmInputMessageType::RELEASE_ALL:
+        case eRealmInputMessageType::CAPTURE:
+        case eRealmInputMessageType::CAPTURE_CANCEL:
             if (payloadSize != 0)
                 return std::unexpected("realm input message must not contain a payload");
             break;
@@ -151,6 +191,17 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
             if (message.width == 0 || message.height == 0 || message.x >= message.width || message.y >= message.height)
                 return std::unexpected("pointer coordinates must be inside a non-empty realm output");
             break;
+        case eRealmInputMessageType::CAPTURE_REGION:
+            if (payloadSize != 16)
+                return std::unexpected("capture region payload has an invalid length");
+            message.x      = readUint32(payload);
+            message.y      = readUint32(payload + 4);
+            message.width  = readUint32(payload + 8);
+            message.height = readUint32(payload + 12);
+            if (message.width == 0 || message.height == 0 || message.x >= REALM_INPUT_OUTPUT_WIDTH || message.y >= REALM_INPUT_OUTPUT_HEIGHT ||
+                message.width > REALM_INPUT_OUTPUT_WIDTH - message.x || message.height > REALM_INPUT_OUTPUT_HEIGHT - message.y)
+                return std::unexpected("capture region must be inside the realm output");
+            break;
         case eRealmInputMessageType::POINTER_BUTTON:
         case eRealmInputMessageType::KEYBOARD_KEY:
             if (payloadSize != 8)
@@ -166,6 +217,20 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
             message.horizontal = static_cast<int32_t>(readUint32(payload));
             message.vertical   = static_cast<int32_t>(readUint32(payload + 4));
             break;
+        case eRealmInputMessageType::CAPTURE_READY:
+            if (payloadSize != 28)
+                return std::unexpected("capture result payload has an invalid length");
+            message.format   = readUint32(payload);
+            message.width    = readUint32(payload + 4);
+            message.height   = readUint32(payload + 8);
+            message.stride   = readUint32(payload + 12);
+            message.flags    = readUint32(payload + 16);
+            message.byteSize = readUint64(payload + 20);
+            if ((message.format != REALM_CAPTURE_FORMAT_ARGB8888 && message.format != REALM_CAPTURE_FORMAT_XRGB8888) || message.width == 0 || message.height == 0 ||
+                message.width > REALM_INPUT_OUTPUT_WIDTH || message.height > REALM_INPUT_OUTPUT_HEIGHT || message.stride < message.width * 4ULL || message.byteSize == 0 ||
+                message.byteSize > REALM_CAPTURE_MAX_BYTES || message.byteSize != static_cast<uint64_t>(message.stride) * message.height)
+                return std::unexpected("capture metadata does not describe a valid bounded frame");
+            break;
     }
 
     return message;
@@ -180,4 +245,19 @@ size_t Realm::realmInputEventCost(const SRealmInputMessage& message) {
         return 1;
 
     return std::max<size_t>(1, message.text.size());
+}
+
+bool Realm::realmInputMessageIsInputCommand(eRealmInputMessageType type) {
+    switch (type) {
+        case eRealmInputMessageType::POINTER_MOVE:
+        case eRealmInputMessageType::POINTER_BUTTON:
+        case eRealmInputMessageType::POINTER_SCROLL:
+        case eRealmInputMessageType::KEYBOARD_KEY:
+        case eRealmInputMessageType::KEYBOARD_TYPE: return true;
+        default: return false;
+    }
+}
+
+bool Realm::realmInputMessageIsCaptureCommand(eRealmInputMessageType type) {
+    return type == eRealmInputMessageType::CAPTURE || type == eRealmInputMessageType::CAPTURE_REGION;
 }

@@ -21,6 +21,7 @@
 #include <glaze/glaze.hpp>
 #include <limits>
 #include <linux/input-event-codes.h>
+#include <map>
 #include <optional>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -39,6 +40,8 @@ struct SRealmControlParams {
     std::optional<std::string> realm;
     std::optional<uint32_t>    x;
     std::optional<uint32_t>    y;
+    std::optional<uint32_t>    width;
+    std::optional<uint32_t>    height;
     std::optional<std::string> button;
     std::optional<std::string> axis;
     std::optional<int32_t>     steps;
@@ -83,14 +86,15 @@ static std::string realmResult(std::string_view action, const SP<CRealm>& realm)
     return std::format(R"({{"action":"{}","realm":{}}})", action, realmJSON(*realm));
 }
 
-static bool hasInputParameters(const SRealmControlParams& params) {
-    return params.x || params.y || params.button || params.axis || params.steps || params.keycode || params.pressed || params.text;
+static bool hasAutomationParameters(const SRealmControlParams& params) {
+    return params.x || params.y || params.width || params.height || params.button || params.axis || params.steps || params.keycode || params.pressed || params.text;
 }
 
 static bool onlyRealmAnd(const SRealmControlParams& params, std::initializer_list<std::string_view> fields) {
     const auto contains = [&fields](std::string_view field) { return std::ranges::find(fields, field) != fields.end(); };
-    return (!params.x || contains("x")) && (!params.y || contains("y")) && (!params.button || contains("button")) && (!params.axis || contains("axis")) &&
-        (!params.steps || contains("steps")) && (!params.keycode || contains("keycode")) && (!params.pressed || contains("pressed")) && (!params.text || contains("text"));
+    return (!params.x || contains("x")) && (!params.y || contains("y")) && (!params.width || contains("width")) && (!params.height || contains("height")) &&
+        (!params.button || contains("button")) && (!params.axis || contains("axis")) && (!params.steps || contains("steps")) && (!params.keycode || contains("keycode")) &&
+        (!params.pressed || contains("pressed")) && (!params.text || contains("text"));
 }
 
 static std::string inputResult(uint32_t sequence, const SP<CRealm>& realm) {
@@ -175,11 +179,40 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
     return controlSuccess(*request.request_id, inputResult(*result, realm));
 }
 
+static std::string handleCaptureRequest(const SRealmControlRequest& request, const SP<CRealm>& realm, CRealmInputControllerManager* inputController,
+                                        std::optional<uint64_t>* queuedCaptureID) {
+    if (!inputController)
+        return controlError(request.request_id, "controller_unavailable", "realm capture controller support is unavailable");
+
+    const auto&                        method = *request.method;
+    const auto&                        params = *request.params;
+    std::optional<SRealmCaptureRegion> region;
+    if (method == "realm.capture") {
+        if (!onlyRealmAnd(params, {}))
+            return controlError(request.request_id, "invalid_params", "realm.capture accepts only params.realm");
+    } else {
+        if (!params.x || !params.y || !params.width || !params.height || !onlyRealmAnd(params, {"x", "y", "width", "height"}))
+            return controlError(request.request_id, "invalid_params", "realm.capture_region requires only params.realm, params.x, params.y, params.width, and params.height");
+        if (*params.width == 0 || *params.height == 0 || *params.x >= REALM_INPUT_OUTPUT_WIDTH || *params.y >= REALM_INPUT_OUTPUT_HEIGHT ||
+            *params.width > REALM_INPUT_OUTPUT_WIDTH - *params.x || *params.height > REALM_INPUT_OUTPUT_HEIGHT - *params.y)
+            return controlError(request.request_id, "invalid_params", "capture region must be inside the 1280x720 realm output");
+        region = SRealmCaptureRegion{.x = *params.x, .y = *params.y, .width = *params.width, .height = *params.height};
+    }
+
+    auto result = inputController->requestCapture(realm->id(), region);
+    if (!result)
+        return controlError(request.request_id, realmInputErrorName(result.error().code), result.error().message);
+    if (queuedCaptureID)
+        *queuedCaptureID = *result;
+    return controlSuccess(*request.request_id, std::format(R"({{"action":"queued","capture_id":{},"realm":{}}})", *result, realmJSON(*realm)));
+}
+
 std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManager& windowManager, std::string_view payload) {
     return realmControlRequest(manager, windowManager, nullptr, payload);
 }
 
-std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManager& windowManager, CRealmInputControllerManager* inputController, std::string_view payload) {
+static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowManager& windowManager, CRealmInputControllerManager* inputController, std::string_view payload,
+                                           std::optional<uint64_t>* queuedCaptureID) {
     auto parsed = parseControlRequest(payload);
     if (!parsed)
         return controlError(std::nullopt, "parse_error", parsed.error());
@@ -193,14 +226,14 @@ std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManag
 
     const auto& method = *request.method;
     if (method == "realm.list") {
-        if (request.params && (request.params->realm || hasInputParameters(*request.params)))
+        if (request.params && (request.params->realm || hasAutomationParameters(*request.params)))
             return controlError(request.request_id, "invalid_params", "realm.list does not accept parameters");
         return controlSuccess(*request.request_id, std::format(R"({{"realms":{}}})", realmListRequest(manager, FORMAT_JSON)));
     }
 
-    constexpr std::array<std::string_view, 14> REALM_METHODS = {
-        "realm.info",     "realm.create",  "realm.start",  "realm.pause",    "realm.resume",   "realm.stop",   "realm.destroy",
-        "realm.takeover", "realm.release", "pointer.move", "pointer.button", "pointer.scroll", "keyboard.key", "keyboard.type",
+    constexpr std::array<std::string_view, 18> REALM_METHODS = {
+        "realm.info",    "realm.create",    "realm.start",   "realm.pause",          "realm.resume", "realm.stop",     "realm.destroy",  "realm.takeover", "realm.release",
+        "realm.observe", "realm.unobserve", "realm.capture", "realm.capture_region", "pointer.move", "pointer.button", "pointer.scroll", "keyboard.key",   "keyboard.type",
     };
     if (std::ranges::find(REALM_METHODS, method) == REALM_METHODS.end())
         return controlError(request.request_id, "method_not_found", std::format("unknown method '{}'", method));
@@ -208,9 +241,10 @@ std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManag
     if (!request.params || !request.params->realm || request.params->realm->empty())
         return controlError(request.request_id, "invalid_params", std::format("{} requires params.realm", method));
 
-    const bool inputMethod = method == "pointer.move" || method == "pointer.button" || method == "pointer.scroll" || method == "keyboard.key" || method == "keyboard.type";
-    if (!inputMethod && hasInputParameters(*request.params))
-        return controlError(request.request_id, "invalid_params", std::format("{} does not accept input parameters", method));
+    const bool inputMethod   = method == "pointer.move" || method == "pointer.button" || method == "pointer.scroll" || method == "keyboard.key" || method == "keyboard.type";
+    const bool captureMethod = method == "realm.capture" || method == "realm.capture_region";
+    if (!inputMethod && !captureMethod && hasAutomationParameters(*request.params))
+        return controlError(request.request_id, "invalid_params", std::format("{} does not accept automation parameters", method));
 
     const auto& name = *request.params->realm;
     if (method == "realm.create") {
@@ -228,6 +262,8 @@ std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManag
         return controlSuccess(*request.request_id, std::format(R"({{"realm":{}}})", realmJSON(*realm)));
     if (inputMethod)
         return handleInputRequest(request, realm, inputController);
+    if (captureMethod)
+        return handleCaptureRequest(request, realm, inputController, queuedCaptureID);
 
     std::expected<void, std::string> result         = std::unexpected("unsupported realm operation");
     std::string_view                 responseAction = "";
@@ -252,11 +288,21 @@ std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManag
     } else if (method == "realm.release") {
         result         = windowManager.releaseRealm(realm->id());
         responseAction = "released";
+    } else if (method == "realm.observe") {
+        result         = manager.allowObservation(realm->id());
+        responseAction = "observation allowed";
+    } else if (method == "realm.unobserve") {
+        result         = manager.denyObservation(realm->id());
+        responseAction = "observation denied";
     }
 
     if (!result)
         return controlError(request.request_id, "operation_failed", result.error());
     return controlSuccess(*request.request_id, realmResult(responseAction, realm));
+}
+
+std::string Realm::realmControlRequest(CRealmManager& manager, CRealmWindowManager& windowManager, CRealmInputControllerManager* inputController, std::string_view payload) {
+    return realmControlRequestImpl(manager, windowManager, inputController, payload, nullptr);
 }
 
 std::string Realm::realmControlFrame(std::string_view payload) {
@@ -278,25 +324,39 @@ bool Realm::realmControlPeerAuthorized(uid_t peerUID, uid_t expectedUID) {
 }
 
 struct CRealmControlServer::SImpl {
+    struct SOutputFrame {
+        std::string     frame;
+        size_t          offset = 0;
+        CFileDescriptor descriptor;
+    };
+
     struct SClient {
-        CFileDescriptor         fd;
-        wl_event_source*        eventSource = nullptr;
-        std::string             input;
-        size_t                  inputOffset = 0;
-        std::deque<std::string> output;
-        size_t                  outputOffset    = 0;
-        size_t                  queuedOutput    = 0;
-        bool                    closeAfterWrite = false;
+        uint64_t                 id = 0;
+        CFileDescriptor          fd;
+        wl_event_source*         eventSource = nullptr;
+        std::string              input;
+        size_t                   inputOffset = 0;
+        std::deque<SOutputFrame> output;
+        size_t                   queuedOutput    = 0;
+        bool                     closeAfterWrite = false;
+    };
+
+    struct SPendingCapture {
+        uint64_t clientID = 0;
     };
 
     SImpl(CRealmManager& manager_, CRealmWindowManager& windowManager_, CRealmInputControllerManager* inputController_, SRealmControlServerOptions options_) :
         manager(manager_), windowManager(windowManager_), inputController(inputController_), options(std::move(options_)) {
         if (!options.expectedPeerUID)
             options.expectedPeerUID = geteuid();
+        if (inputController)
+            inputController->setCaptureResultCallback([this](SRealmCaptureResult result) { handleCaptureResult(std::move(result)); });
         start();
     }
 
     ~SImpl() {
+        if (inputController)
+            inputController->setCaptureResultCallback({});
         shutdown();
     }
 
@@ -413,6 +473,7 @@ struct CRealmControlServer::SImpl {
     }
 
     void shutdown() {
+        pendingCaptures.clear();
         for (auto& client : clients) {
             if (client.eventSource)
                 wl_event_source_remove(client.eventSource);
@@ -503,9 +564,12 @@ struct CRealmControlServer::SImpl {
             }
 
             clients.emplace_back(SClient{
+                .id          = nextClientID++,
                 .fd          = std::move(connection),
                 .eventSource = eventSource,
             });
+            if (nextClientID == 0)
+                nextClientID = 1;
         }
     }
 
@@ -606,12 +670,15 @@ struct CRealmControlServer::SImpl {
                 return;
             }
 
-            const std::string_view payload{client.input.data() + client.inputOffset + 4, length};
-            const auto             response = realmControlRequest(manager, windowManager, inputController, payload);
+            const std::string_view  payload{client.input.data() + client.inputOffset + 4, length};
+            std::optional<uint64_t> queuedCaptureID;
+            const auto              response = realmControlRequestImpl(manager, windowManager, inputController, payload, &queuedCaptureID);
             if (!queueResponse(client, response)) {
                 queueTerminalError(client, "response_too_large", "control response exceeds the configured message limit");
                 return;
             }
+            if (queuedCaptureID)
+                pendingCaptures[*queuedCaptureID] = SPendingCapture{.clientID = client.id};
 
             client.inputOffset += sc<size_t>(length) + 4;
             ++processedRequests;
@@ -621,7 +688,7 @@ struct CRealmControlServer::SImpl {
             queueTerminalError(client, "server_overloaded", "too many pipelined requests");
     }
 
-    bool queueResponse(SClient& client, std::string_view response) {
+    bool queueResponse(SClient& client, std::string_view response, CFileDescriptor descriptor = {}) {
         if (response.size() > options.maxMessageSize)
             return false;
 
@@ -630,7 +697,7 @@ struct CRealmControlServer::SImpl {
             return false;
 
         client.queuedOutput += frame.size();
-        client.output.emplace_back(std::move(frame));
+        client.output.emplace_back(SOutputFrame{.frame = std::move(frame), .descriptor = std::move(descriptor)});
         return true;
     }
 
@@ -645,16 +712,37 @@ struct CRealmControlServer::SImpl {
     bool flushClient(SClient& client) {
         constexpr size_t MAX_WRITES_PER_TICK = 16;
         for (size_t writes = 0; writes < MAX_WRITES_PER_TICK && !client.output.empty(); ++writes) {
-            const auto& frame     = client.output.front();
-            const auto  remaining = frame.size() - client.outputOffset;
-            const auto  sent      = send(client.fd.get(), frame.data() + client.outputOffset, remaining, MSG_NOSIGNAL);
+            auto&      output    = client.output.front();
+            const auto remaining = output.frame.size() - output.offset;
+            ssize_t    sent      = -1;
+            if (output.descriptor.isValid() && output.offset == 0) {
+                iovec iov{
+                    .iov_base = output.frame.data(),
+                    .iov_len  = remaining,
+                };
+                std::array<char, CMSG_SPACE(sizeof(int))> ancillary{};
+                msghdr                                    header{
+                                                       .msg_iov        = &iov,
+                                                       .msg_iovlen     = 1,
+                                                       .msg_control    = ancillary.data(),
+                                                       .msg_controllen = ancillary.size(),
+                };
+                auto* control       = CMSG_FIRSTHDR(&header);
+                control->cmsg_level = SOL_SOCKET;
+                control->cmsg_type  = SCM_RIGHTS;
+                control->cmsg_len   = CMSG_LEN(sizeof(int));
+                const auto frameFD  = output.descriptor.get();
+                std::memcpy(CMSG_DATA(control), &frameFD, sizeof(frameFD));
+                sent = sendmsg(client.fd.get(), &header, MSG_NOSIGNAL);
+            } else
+                sent = send(client.fd.get(), output.frame.data() + output.offset, remaining, MSG_NOSIGNAL);
             if (sent > 0) {
-                client.outputOffset += sc<size_t>(sent);
+                if (output.descriptor.isValid())
+                    output.descriptor.reset();
+                output.offset += sc<size_t>(sent);
                 client.queuedOutput -= sc<size_t>(sent);
-                if (client.outputOffset == frame.size()) {
+                if (output.offset == output.frame.size())
                     client.output.pop_front();
-                    client.outputOffset = 0;
-                }
                 continue;
             }
             if (sent < 0 && errno == EINTR)
@@ -682,6 +770,33 @@ struct CRealmControlServer::SImpl {
         client.inputOffset = 0;
     }
 
+    void handleCaptureResult(SRealmCaptureResult result) {
+        const auto pending = pendingCaptures.find(result.captureID);
+        if (pending == pendingCaptures.end())
+            return;
+
+        const auto client = std::ranges::find(clients, pending->second.clientID, &SClient::id);
+        pendingCaptures.erase(pending);
+        if (client == clients.end())
+            return;
+
+        if (!result.error.empty()) {
+            queueResponse(
+                *client,
+                std::format(R"({{"event":"realm.capture.failed","capture_id":{},"realm_id":{},"error":"{}"}})", result.captureID, result.realmID, escapeJSONStrings(result.error)));
+            updateClientEvents(*client);
+            return;
+        }
+
+        const auto formatName = result.format == REALM_CAPTURE_FORMAT_ARGB8888 ? "argb8888" : "xrgb8888";
+        const auto response   = std::format(
+            R"({{"event":"realm.capture.ready","capture_id":{},"realm_id":{},"frame":{{"transport":"scm_rights","fd_count":1,"format":{},"format_name":"{}","width":{},"height":{},"stride":{},"byte_size":{},"y_inverted":{}}}}})",
+            result.captureID, result.realmID, result.format, formatName, result.width, result.height, result.stride, result.byteSize, result.flags & 1 ? "true" : "false");
+        if (!queueResponse(*client, response, std::move(result.frameFD)))
+            queueTerminalError(*client, "server_overloaded", "capture result could not be queued");
+        updateClientEvents(*client);
+    }
+
     void updateClientEvents(SClient& client) {
         if (!client.eventSource)
             return;
@@ -697,22 +812,26 @@ struct CRealmControlServer::SImpl {
     }
 
     void removeClient(std::vector<SClient>::iterator client) {
+        const auto clientID = client->id;
         if (client->eventSource)
             wl_event_source_remove(client->eventSource);
         clients.erase(client);
+        std::erase_if(pendingCaptures, [clientID](const auto& entry) { return entry.second.clientID == clientID; });
     }
 
-    CRealmManager&                manager;
-    CRealmWindowManager&          windowManager;
-    CRealmInputControllerManager* inputController = nullptr;
-    SRealmControlServerOptions    options;
-    CFileDescriptor               listenFD;
-    wl_event_source*              listenEventSource = nullptr;
-    std::vector<SClient>          clients;
-    std::string                   lastError;
-    dev_t                         socketDevice = 0;
-    ino_t                         socketInode  = 0;
-    bool                          ownsSocket   = false;
+    CRealmManager&                      manager;
+    CRealmWindowManager&                windowManager;
+    CRealmInputControllerManager*       inputController = nullptr;
+    SRealmControlServerOptions          options;
+    CFileDescriptor                     listenFD;
+    wl_event_source*                    listenEventSource = nullptr;
+    std::vector<SClient>                clients;
+    std::map<uint64_t, SPendingCapture> pendingCaptures;
+    std::string                         lastError;
+    dev_t                               socketDevice = 0;
+    ino_t                               socketInode  = 0;
+    bool                                ownsSocket   = false;
+    uint64_t                            nextClientID = 1;
 };
 
 CRealmControlServer::CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager) :

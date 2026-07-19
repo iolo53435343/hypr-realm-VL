@@ -227,6 +227,35 @@ TEST_F(CRealmManagerTest, maintainsExclusiveInputOwnershipAcrossLifecycle) {
               }));
 }
 
+TEST_F(CRealmManagerTest, observationPermissionIsIndependentAndRevokedOnStop) {
+    std::vector<eRealmObservationPermission> permissions;
+    auto                                     observationListener =
+        m_manager->m_events.observationPermission.listen([&permissions](const SRealmObservationPermissionEvent& event) { permissions.emplace_back(event.permission); });
+
+    auto created = m_manager->createRealm("observation");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(m_manager->allowObservation(realm->id()));
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
+
+    ASSERT_TRUE(m_manager->takeoverRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::HUMAN);
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
+
+    ASSERT_TRUE(m_manager->pauseRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::NONE);
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
+    ASSERT_TRUE(m_manager->resumeRealm(realm->id()));
+    ASSERT_TRUE(m_manager->stopRealm(realm->id()));
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::STOPPED));
+    EXPECT_EQ(permissions, (std::vector<eRealmObservationPermission>{eRealmObservationPermission::ALLOWED, eRealmObservationPermission::DENIED}));
+}
+
 TEST_F(CRealmManagerTest, emergencyPauseStopsAutomationInEveryRunningRealm) {
     auto firstCreated  = m_manager->createRealm("emergency-first");
     auto secondCreated = m_manager->createRealm("emergency-second");

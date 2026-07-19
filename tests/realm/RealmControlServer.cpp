@@ -10,6 +10,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -83,6 +84,11 @@ static std::vector<std::string> decodeControlFrames(std::string& bytes) {
 
 class CRealmControlServerTest : public testing::Test {
   protected:
+    struct SReceivedResponses {
+        std::vector<std::string> responses;
+        CFileDescriptor          descriptor;
+    };
+
     void SetUp() override {
         m_root = std::filesystem::temp_directory_path() / std::format("hrcontrol.{}", getpid());
         std::filesystem::remove_all(m_root);
@@ -162,6 +168,53 @@ class CRealmControlServerTest : public testing::Test {
                 return receivedResponses;
         }
         return {};
+    }
+
+    SReceivedResponses receiveResponsesWithDescriptor(CFileDescriptor& client, size_t count) {
+        std::string        bytes;
+        SReceivedResponses received;
+        for (size_t attempt = 0; attempt < 100; ++attempt) {
+            m_manager->dispatchPendingEvents();
+            m_inputController->dispatchPendingEvents();
+            m_server->dispatchPendingEvents();
+
+            std::array<char, 4096> buffer{};
+            while (true) {
+                iovec                                         iov{.iov_base = buffer.data(), .iov_len = buffer.size()};
+                std::array<char, CMSG_SPACE(sizeof(int) * 2)> ancillary{};
+                msghdr                                        header{
+                                                           .msg_iov        = &iov,
+                                                           .msg_iovlen     = 1,
+                                                           .msg_control    = ancillary.data(),
+                                                           .msg_controllen = ancillary.size(),
+                };
+                const auto size = recvmsg(client.get(), &header, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
+                if (size > 0) {
+                    bytes.append(buffer.data(), sc<size_t>(size));
+                    for (auto* control = CMSG_FIRSTHDR(&header); control; control = CMSG_NXTHDR(&header, control)) {
+                        if (control->cmsg_level != SOL_SOCKET || control->cmsg_type != SCM_RIGHTS || control->cmsg_len < CMSG_LEN(sizeof(int)))
+                            continue;
+                        int descriptor = -1;
+                        std::memcpy(&descriptor, CMSG_DATA(control), sizeof(descriptor));
+                        if (!received.descriptor.isValid())
+                            received.descriptor = CFileDescriptor{descriptor};
+                        else
+                            close(descriptor);
+                    }
+                    continue;
+                }
+                if (size < 0 && errno == EINTR)
+                    continue;
+                break;
+            }
+
+            auto responses = decodeControlFrames(bytes);
+            received.responses.insert(received.responses.end(), std::make_move_iterator(responses.begin()), std::make_move_iterator(responses.end()));
+            if (received.responses.size() >= count)
+                return received;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return received;
     }
 
     std::filesystem::path            m_root;
@@ -249,6 +302,84 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
     EXPECT_FALSE(m_inputController->controllerReady(realm->id()));
 }
 
+TEST_F(CRealmControlServerTest, capturesRealmFramesThroughSharedMemoryWithIndependentPermission) {
+    ASSERT_TRUE(m_manager->createRealm("capture"));
+    const auto realm = m_manager->realmByName("capture");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+
+    auto response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"denied","method":"realm.capture","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("code":"observation_denied")"));
+
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"allow","method":"realm.observe","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(m_manager->takeoverRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::HUMAN);
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
+
+    auto client = connectClient();
+    ASSERT_TRUE(client.isValid());
+    const auto request = realmControlFrame(R"({"request_id":"frame","method":"realm.capture","params":{"realm":"capture"}})");
+    ASSERT_EQ(send(client.get(), request.data(), request.size(), MSG_NOSIGNAL), sc<ssize_t>(request.size()));
+
+    auto received = receiveResponsesWithDescriptor(client, 2);
+    ASSERT_EQ(received.responses.size(), 2);
+    EXPECT_TRUE(received.responses[0].contains(R"("action":"queued")"));
+    EXPECT_TRUE(received.responses[0].contains(R"("capture_id":1)"));
+    EXPECT_TRUE(received.responses[1].contains(R"("event":"realm.capture.ready")"));
+    EXPECT_TRUE(received.responses[1].contains(R"("transport":"scm_rights")"));
+    EXPECT_TRUE(received.responses[1].contains(R"("format_name":"xrgb8888")"));
+    EXPECT_TRUE(received.responses[1].contains(R"("width":2)"));
+    EXPECT_TRUE(received.responses[1].contains(R"("byte_size":16)"));
+    ASSERT_TRUE(received.descriptor.isValid());
+
+    std::array<uint8_t, 16> pixels{};
+    ASSERT_EQ(pread(received.descriptor.get(), pixels.data(), pixels.size(), 0), sc<ssize_t>(pixels.size()));
+    EXPECT_EQ(pixels.front(), 0x01);
+    EXPECT_EQ(pixels.back(), 0x10);
+
+    const auto regionRequest = realmControlFrame(R"({"request_id":"region","method":"realm.capture_region","params":{"realm":"capture","x":10,"y":20,"width":100,"height":80}})");
+    ASSERT_EQ(send(client.get(), regionRequest.data(), regionRequest.size(), MSG_NOSIGNAL), sc<ssize_t>(regionRequest.size()));
+    received = receiveResponsesWithDescriptor(client, 2);
+    ASSERT_EQ(received.responses.size(), 2);
+    EXPECT_TRUE(received.responses[0].contains(R"("capture_id":2)"));
+    EXPECT_TRUE(received.responses[1].contains(R"("event":"realm.capture.ready")"));
+    ASSERT_TRUE(received.descriptor.isValid());
+    ASSERT_TRUE(waitForControllerLog(*realm, "CAPTURE_REGION"));
+
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"deny","method":"realm.unobserve","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"denied-again","method":"realm.capture","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("code":"observation_denied")"));
+}
+
+TEST_F(CRealmControlServerTest, revokingObservationCancelsPendingCaptureAndIgnoresLateFrame) {
+    ASSERT_TRUE(m_manager->createRealm("capture-cancel"));
+    const auto realm = m_manager->realmByName("capture-cancel");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+    ASSERT_TRUE(m_manager->allowObservation(realm->id()));
+
+    auto client = connectClient();
+    ASSERT_TRUE(client.isValid());
+    const auto request = realmControlFrame(R"({"request_id":"cancel","method":"realm.capture","params":{"realm":"capture-cancel"}})");
+    ASSERT_EQ(send(client.get(), request.data(), request.size(), MSG_NOSIGNAL), sc<ssize_t>(request.size()));
+    m_server->dispatchPendingEvents();
+
+    ASSERT_TRUE(m_manager->denyObservation(realm->id()));
+    auto received = receiveResponsesWithDescriptor(client, 2);
+    ASSERT_EQ(received.responses.size(), 2);
+    EXPECT_TRUE(received.responses[0].contains(R"("action":"queued")"));
+    EXPECT_TRUE(received.responses[1].contains(R"("event":"realm.capture.failed")"));
+    EXPECT_TRUE(received.responses[1].contains("permission was revoked"));
+    EXPECT_FALSE(received.descriptor.isValid());
+    EXPECT_TRUE(m_inputController->controllerReady(realm->id()));
+}
+
 TEST_F(CRealmControlServerTest, validatesInputShapesAndBoundsBeforeRouting) {
     ASSERT_TRUE(m_manager->createRealm("validation"));
 
@@ -265,6 +396,9 @@ TEST_F(CRealmControlServerTest, validatesInputShapesAndBoundsBeforeRouting) {
         realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"4","method":"keyboard.type","params":{"realm":"validation","text":""}})")
             .contains(R"("code":"invalid_params")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"5","method":"realm.info","params":{"realm":"validation","x":1}})")
+                    .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                    R"({"request_id":"6","method":"realm.capture_region","params":{"realm":"validation","x":1200,"y":0,"width":100,"height":100}})")
                     .contains(R"("code":"invalid_params")"));
 }
 
