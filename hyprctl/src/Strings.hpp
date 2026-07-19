@@ -40,6 +40,9 @@ commands:
     output ...          → Allows you to add and remove fake outputs to your
                           preferred backend
     plugin ...          → Issue a plugin request
+    realm <action> <name> → Create, start, pause, resume, stop, destroy, or
+                          inspect an agent realm
+    realms              → Lists all agent realms and their lifecycle state
     reload [config-only] → Issue a reload to force reload the config. Pass
                           'config-only' to disable monitor reload
     repl [code]         → Enter interactive Lua REPL mode (^D to exit)

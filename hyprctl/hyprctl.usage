@@ -20,6 +20,8 @@ hyprctl [<OPTIONS>]... <ARGUMENTS>
 
 <KEYBOARDS> ::= {{{ hyprctl devices | sed -n '/Keyboard at/{n; s/^\s\+//; p}' }}};
 
+<REALMS> ::= {{{ hyprctl realms | sed -n 's/^Realm \(.*\) ([0-9]\+):$/\1/p' }}};
+
 <NOTIFICATION_TYPES> ::=  (0)   "WARNING"
                       |   (1)   "INFO"
                       |   (2)   "HINT"
@@ -82,6 +84,8 @@ hyprctl [<OPTIONS>]... <ARGUMENTS>
             |   (notify <NOTIFICATION_TYPES> <NUM>)                   "Send a notification using the built-in Hyprland notification system"
             |   (output (create (wayland | x11 | headless | auto) | remove <MONITORS>)) "Allows adding/removing fake outputs to a specific backend"
             |   (plugin <AVAILABLE_PLUGINS>)                          "Interact with a plugin"
+            |   (realm (create <REALM_NAME> | (start | pause | resume | stop | destroy | info) <REALMS>)) "Manage an agent realm"
+            |   (realms)                                             "List all agent realms and their lifecycle state"
             |   (reload [config-only])                                "Force reload the config"
             |   (rollinglog [-f])                                     "Print tail of the log"
             |   (setcursor)                                           "Set the cursor theme and reloads the cursor manager"

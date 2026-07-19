@@ -1,8 +1,12 @@
-_hyprctl_cmd_1 () {
-    hyprctl monitors | awk '/Monitor/{ print $2 }'
+_hyprctl_cmd_0 () {
+    hyprctl realms | sed -n 's/^Realm \(.*\) ([0-9]\+):$/\1/p'
 }
 
 _hyprctl_cmd_3 () {
+    hyprctl monitors | awk '/Monitor/{ print $2 }'
+}
+
+_hyprctl_cmd_4 () {
     hyprctl clients | awk '/class/{print $2}'
 }
 
@@ -10,7 +14,7 @@ _hyprctl_cmd_2 () {
     hyprctl devices | sed -n '/Keyboard at/{n; s/^\s\+//; p}'
 }
 
-_hyprctl_cmd_0 () {
+_hyprctl_cmd_1 () {
     hyprpm list | awk '/Plugin/{print $4}'
 }
 
@@ -23,25 +27,29 @@ _hyprctl () {
     local words cword
     _get_comp_words_by_ref -n "$COMP_WORDBREAKS" words cword
 
-    declare -a literals=(resizeactive 2 changegroupactive -r moveintogroup forceallowsinput 4 ::= systeminfo all layouts setprop animationstyle switchxkblayout create denywindowfromgroup headless activebordercolor exec setcursor wayland focusurgentorlast workspacerules movecurrentworkspacetomonitor movetoworkspacesilent hyprpaper alpha inactivebordercolor movegroupwindow movecursortocorner movewindowpixel prev movewindow globalshortcuts clients dimaround splash execr monitors 0 forcenoborder -q animations 1 nomaxsize splitratio moveactive pass swapnext devices layers rounding lockactivegroup 5 moveworkspacetomonitor -f -i --quiet forcenodim pin 0 1 forceopaque forcenoshadow setfloating minsize alphaoverride sendshortcut workspaces cyclenext alterzorder togglegroup lockgroups bordersize dpms focuscurrentorlast -1 --batch notify remove instances 1 3 moveoutofgroup killactive 2 movetoworkspace movecursor configerrors closewindow swapwindow tagwindow forcerendererreload centerwindow auto focuswindow seterror nofocus alphafullscreen binds version -h togglespecialworkspace fullscreen windowdancecompat 0 keyword toggleopaque 3 --instance togglefloating renameworkspace alphafullscreenoverride activeworkspace x11 kill forceopaqueoverriden output global dispatch reload forcenoblur -j event --help disable -1 activewindow keepaspectratio dismissnotify focusmonitor movefocus plugin exit workspace fullscreenstate getoption alphainactiveoverride alphainactive decorations settiled config-only descriptions resizewindowpixel fakefullscreen rollinglog swapactiveworkspaces submap next movewindoworgroup cursorpos forcenoanims focusworkspaceoncurrentmonitor maxsize sendkeystate)
+    local -a literals=("config-only" "cyclenext" "realms" "cursorpos" "bordersize" "renameworkspace" "animationstyle" "focuswindow" "--help" "-f" "auto" "0" "start" "swapnext" "forceallowsinput" "moveactive" "activebordercolor" "alphafullscreen" "realm" "wayland" "layers" "minsize" "monitors" "1" "kill" "settiled" "3" "focusmonitor" "swapwindow" "moveoutofgroup" "notify" "movecursor" "setcursor" "movecurrentworkspacetomonitor" "4" "seterror" "nomaxsize" "1" "forcenoanims" "setprop" "-i" "-q" "togglefloating" "3" "workspacerules" "movetoworkspace" "globalshortcuts" "resume" "movetoworkspacesilent" "disable" "workspaces" "movegroupwindow" "closewindow" "0" "0" "binds" "movewindow" "splitratio" "alpha" "denywindowfromgroup" "workspace" "configerrors" "togglegroup" "getoption" "--instance" "forceopaque" "keepaspectratio" "-h" "killactive" "pass" "event" "decorations" "devices" "focuscurrentorlast" "submap" "global" "alphafullscreenoverride" "headless" "forcerendererreload" "movewindowpixel" "version" "dpms" "resizeactive" "moveintogroup" "2" "5" "alphaoverride" "setfloating" "rollinglog" "::=" "rounding" "layouts" "moveworkspacetomonitor" "exec" "info" "alphainactiveoverride" "alterzorder" "-1" "fakefullscreen" "nofocus" "animations" "keyword" "forcenoborder" "forcenodim" "status" "--quiet" "pin" "output" "forcenoblur" "sendkeystate" "togglespecialworkspace" "fullscreen" "toggleopaque" "pause" "focusworkspaceoncurrentmonitor" "next" "changegroupactive" "-j" "instances" "execr" "exit" "clients" "descriptions" "all" "--batch" "dismissnotify" "inactivebordercolor" "switchxkblayout" "fullscreenstate" "tagwindow" "movewindoworgroup" "-r" "stop" "movefocus" "focusurgentorlast" "remove" "activeworkspace" "dispatch" "create" "centerwindow" "2" "hyprpaper" "-1" "destroy" "reload" "alphainactive" "systeminfo" "plugin" "dimaround" "activewindow" "swapactiveworkspaces" "splash" "sendshortcut" "maxsize" "lockactivegroup" "windowdancecompat" "forceopaqueoverriden" "lockgroups" "movecursortocorner" "x11" "prev" "1" "resizewindowpixel" "forcenoshadow")
+
     declare -A literal_transitions
-    literal_transitions[0]="([120]=14 [43]=2 [125]=21 [81]=2 [3]=21 [51]=2 [50]=2 [128]=2 [89]=2 [58]=21 [8]=2 [10]=2 [11]=3 [130]=4 [13]=5 [97]=6 [101]=2 [102]=21 [133]=7 [100]=2 [137]=2 [22]=2 [19]=2 [140]=8 [25]=2 [143]=2 [107]=9 [146]=10 [69]=2 [33]=2 [34]=2 [78]=21 [114]=2 [37]=2 [151]=2 [116]=2 [121]=13 [123]=21 [39]=11 [42]=21 [79]=15 [118]=12)"
-    literal_transitions[1]="([81]=2 [51]=2 [50]=2 [128]=2 [8]=2 [89]=2 [10]=2 [11]=3 [130]=4 [13]=5 [97]=6 [101]=2 [133]=7 [100]=2 [22]=2 [19]=2 [137]=2 [140]=8 [25]=2 [143]=2 [107]=9 [146]=10 [69]=2 [33]=2 [34]=2 [114]=2 [37]=2 [151]=2 [116]=2 [39]=11 [118]=12 [121]=13 [120]=14 [79]=15 [43]=2)"
-    literal_transitions[3]="([139]=2 [63]=16 [64]=16 [45]=16 [105]=16 [27]=2 [26]=2 [52]=4 [5]=16 [66]=2 [67]=16 [129]=16 [113]=16 [12]=2 [74]=4 [99]=2 [35]=16 [152]=16 [98]=16 [59]=16 [117]=16 [41]=16 [17]=2 [138]=16 [154]=2 [122]=16)"
-    literal_transitions[6]="([126]=2)"
-    literal_transitions[10]="([56]=2)"
-    literal_transitions[11]="([9]=2)"
-    literal_transitions[12]="([14]=19 [80]=22)"
-    literal_transitions[13]="([142]=2)"
-    literal_transitions[14]="([0]=2 [84]=2 [2]=2 [85]=2 [4]=2 [87]=2 [88]=2 [90]=2 [91]=2 [92]=2 [93]=2 [94]=2 [96]=2 [15]=2 [18]=2 [103]=2 [21]=2 [104]=2 [23]=2 [24]=2 [28]=2 [29]=2 [30]=2 [108]=2 [111]=2 [32]=2 [112]=2 [36]=2 [38]=2 [119]=2 [124]=2 [46]=2 [47]=2 [48]=2 [49]=2 [53]=2 [55]=2 [131]=2 [132]=2 [134]=2 [135]=2 [60]=2 [136]=20 [141]=2 [65]=2 [144]=2 [145]=2 [68]=2 [147]=2 [70]=2 [71]=2 [72]=2 [73]=2 [148]=2 [75]=2 [76]=2 [150]=2 [153]=2)"
-    literal_transitions[15]="([86]=4 [6]=4 [109]=4 [61]=4 [77]=4 [54]=4 [62]=4)"
-    literal_transitions[16]="([40]=2 [44]=2)"
-    literal_transitions[17]="([7]=23)"
-    literal_transitions[18]="([31]=2 [149]=2)"
-    literal_transitions[19]="([95]=2 [16]=2 [115]=2 [20]=2)"
-    literal_transitions[20]="([106]=2 [82]=2 [127]=2 [1]=2 [83]=2)"
-    literal_transitions[23]="([57]=21 [110]=21)"
-    declare -A match_anything_transitions=([6]=17 [7]=2 [0]=1 [22]=2 [5]=18 [4]=2 [2]=17 [18]=2 [11]=17 [8]=2 [9]=2 [13]=17 [10]=17 [1]=1)
+    literal_transitions[0]="([122]=4 [125]=2 [88]=3 [2]=4 [39]=5 [41]=1 [3]=4 [91]=4 [127]=6 [44]=4 [46]=4 [131]=1 [50]=4 [8]=1 [104]=4 [55]=4 [100]=4 [101]=7 [137]=10 [136]=4 [63]=4 [61]=4 [105]=1 [107]=9 [141]=4 [18]=11 [67]=1 [144]=12 [146]=4 [20]=4 [71]=13 [72]=4 [22]=14 [147]=15 [24]=4 [149]=4 [151]=4 [30]=16 [80]=4 [117]=1 [118]=4 [32]=4 [35]=17 [121]=4 [124]=1)"
+    literal_transitions[3]="([9]=4)"
+    literal_transitions[5]="([86]=23 [17]=4 [38]=23 [65]=23 [66]=23 [108]=23 [126]=4 [145]=4 [90]=2 [21]=4 [148]=23 [4]=2 [6]=4 [76]=23 [153]=4 [155]=23 [95]=23 [156]=23 [99]=23 [36]=23 [58]=4 [16]=4 [102]=23 [14]=23 [103]=23 [163]=23)"
+    literal_transitions[8]="([125]=2 [88]=3 [2]=4 [39]=5 [3]=4 [91]=4 [127]=6 [44]=4 [46]=4 [50]=4 [104]=4 [55]=4 [100]=4 [101]=7 [136]=4 [137]=10 [61]=4 [63]=4 [107]=9 [141]=4 [18]=11 [144]=12 [146]=4 [20]=4 [71]=13 [72]=4 [22]=14 [147]=15 [24]=4 [149]=4 [151]=4 [30]=16 [80]=4 [118]=4 [32]=4 [35]=17 [121]=4 [122]=4)"
+    literal_transitions[9]="([138]=24 [135]=18)"
+    literal_transitions[10]="([87]=4 [1]=4 [5]=4 [92]=4 [93]=4 [7]=4 [96]=4 [98]=4 [13]=4 [15]=4 [106]=4 [109]=4 [110]=4 [111]=4 [112]=4 [114]=4 [25]=4 [116]=4 [27]=4 [28]=4 [29]=4 [31]=4 [119]=4 [120]=4 [33]=4 [42]=4 [128]=21 [129]=4 [45]=4 [130]=4 [48]=4 [133]=4 [134]=4 [51]=4 [52]=4 [56]=4 [57]=4 [59]=4 [60]=4 [62]=4 [139]=4 [68]=4 [69]=4 [70]=4 [73]=4 [74]=4 [150]=4 [75]=4 [152]=4 [154]=4 [78]=4 [79]=4 [157]=4 [158]=4 [81]=4 [82]=4 [83]=4 [162]=4)"
+    literal_transitions[11]="([47]=19 [12]=19 [94]=19 [113]=19 [132]=19 [138]=20 [143]=19)"
+    literal_transitions[12]="([0]=4)"
+    literal_transitions[14]="([123]=4)"
+    literal_transitions[16]="([26]=2 [140]=2 [34]=2 [161]=2 [142]=2 [54]=2 [85]=2)"
+    literal_transitions[17]="([49]=4)"
+    literal_transitions[21]="([37]=4 [43]=4 [84]=4 [53]=4 [97]=4)"
+    literal_transitions[22]="([89]=25)"
+    literal_transitions[23]="([23]=4 [11]=4)"
+    literal_transitions[24]="([10]=4 [77]=4 [19]=4 [159]=4)"
+    literal_transitions[25]="([40]=1 [64]=1)"
+    literal_transitions[26]="([160]=4 [115]=4)"
+
+    declare -A match_anything_transitions
+    match_anything_transitions=([26]=4 [0]=8 [19]=4 [15]=4 [20]=4 [6]=26 [17]=22 [3]=22 [8]=8 [2]=4 [18]=4 [7]=4 [13]=4 [4]=22 [14]=22 [12]=22)
     declare -A subword_transitions
 
     local state=0
@@ -79,9 +87,21 @@ _hyprctl () {
     done
 
 
-    local -a matches=()
-
     local prefix="${words[$cword]}"
+
+    local shortest_suffix="$word"
+    for ((i=0; i < ${#COMP_WORDBREAKS}; i++)); do
+        local char="${COMP_WORDBREAKS:$i:1}"
+        local candidate="${word##*$char}"
+        if [[ ${#candidate} -lt ${#shortest_suffix} ]]; then
+            shortest_suffix=$candidate
+        fi
+    done
+    local superfluous_prefix=""
+    if [[ "$shortest_suffix" != "$word" ]]; then
+        local superfluous_prefix=${word%$shortest_suffix}
+    fi
+
     if [[ -v "literal_transitions[$state]" ]]; then
         local state_transitions_initializer=${literal_transitions[$state]}
         declare -A state_transitions
@@ -90,37 +110,24 @@ _hyprctl () {
         for literal_id in "${!state_transitions[@]}"; do
             local literal="${literals[$literal_id]}"
             if [[ $literal = "${prefix}"* ]]; then
-                matches+=("$literal ")
+                local completion=${literal#"$superfluous_prefix"}
+                COMPREPLY+=("$completion ")
             fi
         done
     fi
     declare -A commands
-    commands=([7]=0 [22]=1 [8]=3 [5]=2)
+    commands=([15]=1 [18]=3 [19]=0 [13]=4 [6]=2)
     if [[ -v "commands[$state]" ]]; then
         local command_id=${commands[$state]}
         local completions=()
-        readarray -t completions < <(_hyprctl_cmd_${command_id} "$prefix" | cut -f1)
+        mapfile -t completions < <(_hyprctl_cmd_${command_id} "$prefix" | cut -f1)
         for item in "${completions[@]}"; do
             if [[ $item = "${prefix}"* ]]; then
-                matches+=("$item")
+                COMPREPLY+=("$item")
             fi
         done
     fi
 
-
-    local shortest_suffix="$prefix"
-    for ((i=0; i < ${#COMP_WORDBREAKS}; i++)); do
-        local char="${COMP_WORDBREAKS:$i:1}"
-        local candidate=${prefix##*$char}
-        if [[ ${#candidate} -lt ${#shortest_suffix} ]]; then
-            shortest_suffix=$candidate
-        fi
-    done
-    local superfluous_prefix=""
-    if [[ "$shortest_suffix" != "$prefix" ]]; then
-        local superfluous_prefix=${prefix%$shortest_suffix}
-    fi
-    COMPREPLY=("${matches[@]#$superfluous_prefix}")
 
     return 0
 }

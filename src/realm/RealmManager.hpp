@@ -2,6 +2,7 @@
 
 #include "Realm.hpp"
 #include "../helpers/memory/Memory.hpp"
+#include "../helpers/signal/Signal.hpp"
 
 #include <chrono>
 #include <expected>
@@ -17,6 +18,23 @@
 class CEventLoopTimer;
 
 namespace Realm {
+    enum class eRealmLifecycleEvent : uint8_t {
+        CREATED = 0,
+        STARTED,
+        PAUSED,
+        RESUMED,
+        STOPPED,
+        FAILED,
+        DESTROYED,
+    };
+
+    std::string_view realmLifecycleEventName(eRealmLifecycleEvent event);
+
+    struct SRealmLifecycleEvent {
+        eRealmLifecycleEvent type = eRealmLifecycleEvent::CREATED;
+        SP<CRealm>           realm;
+    };
+
     struct SRealmManagerOptions {
         std::filesystem::path     runtimeRoot;
         std::filesystem::path     compositorBinary;
@@ -45,6 +63,10 @@ namespace Realm {
 
         void                                   dispatchPendingEvents();
         void                                   shutdownAll();
+
+        struct {
+            CSignalT<SRealmLifecycleEvent> lifecycle;
+        } m_events;
 
       private:
         struct SRealmProcess {
@@ -77,6 +99,7 @@ namespace Realm {
         void                                      finishProcessCleanup(uint64_t id, SRealmProcess& process);
         bool                                      signalProcessGroup(const SRealmProcess& process, int signal) const;
         void                                      setupPollTimer();
+        void                                      emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRealm>& realm);
 
         SRealmManagerOptions                      m_options;
         std::vector<SP<CRealm>>                   m_realms;

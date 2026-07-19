@@ -35,6 +35,20 @@ using namespace Realm;
 using namespace Hyprutils::Memory;
 using namespace Hyprutils::OS;
 
+std::string_view Realm::realmLifecycleEventName(eRealmLifecycleEvent event) {
+    switch (event) {
+        case eRealmLifecycleEvent::CREATED: return "realmcreated";
+        case eRealmLifecycleEvent::STARTED: return "realmstarted";
+        case eRealmLifecycleEvent::PAUSED: return "realmpaused";
+        case eRealmLifecycleEvent::RESUMED: return "realmresumed";
+        case eRealmLifecycleEvent::STOPPED: return "realmstopped";
+        case eRealmLifecycleEvent::FAILED: return "realmfailed";
+        case eRealmLifecycleEvent::DESTROYED: return "realmdestroyed";
+    }
+
+    return "realmunknown";
+}
+
 enum class eSupervisorMessageType : uint32_t {
     STARTED = 1,
     START_FAILED,
@@ -475,6 +489,10 @@ void CRealmManager::setupPollTimer() {
     g_pEventLoopManager->addTimer(m_pollTimer);
 }
 
+void CRealmManager::emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRealm>& realm) {
+    m_events.lifecycle.emit(SRealmLifecycleEvent{.type = event, .realm = realm});
+}
+
 std::expected<void, std::string> CRealmManager::validateName(const std::string& name) const {
     if (name.empty())
         return std::unexpected("realm name cannot be empty");
@@ -499,6 +517,7 @@ std::expected<SP<CRealm>, std::string> CRealmManager::createRealm(const std::str
 
     auto realm = makeShared<CRealm>(m_nextID++, name);
     m_realms.emplace_back(realm);
+    emitLifecycleEvent(eRealmLifecycleEvent::CREATED, realm);
     return realm;
 }
 
@@ -638,13 +657,15 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
 
     realm->m_exitCode = -1;
     if (const auto prepared = prepareRuntime(*realm); !prepared) {
-        realm->transitionTo(eRealmState::FAILED);
+        if (realm->transitionTo(eRealmState::FAILED))
+            emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realm);
         return prepared;
     }
 
     auto launched = launchRealmProcess(*realm);
     if (!launched) {
-        realm->transitionTo(eRealmState::FAILED);
+        if (realm->transitionTo(eRealmState::FAILED))
+            emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realm);
         return std::unexpected(launched.error());
     }
 
@@ -665,7 +686,8 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
     if (launched->execError != 0) {
         process.failOnExit = true;
         realm->m_exitCode  = 127;
-        realm->transitionTo(eRealmState::FAILED);
+        if (realm->transitionTo(eRealmState::FAILED))
+            emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realm);
         return std::unexpected(std::format("failed executing realm compositor: {}", strerror(launched->execError)));
     }
 
@@ -691,7 +713,12 @@ std::expected<void, std::string> CRealmManager::pauseRealm(uint64_t id) {
     if (!signalProcessGroup(process->second, SIGSTOP))
         return std::unexpected(std::format("failed pausing realm '{}': {}", realm->name(), strerror(errno)));
 
-    return realm->transitionTo(eRealmState::PAUSED);
+    auto transition = realm->transitionTo(eRealmState::PAUSED);
+    if (!transition)
+        return transition;
+
+    emitLifecycleEvent(eRealmLifecycleEvent::PAUSED, realm);
+    return {};
 }
 
 std::expected<void, std::string> CRealmManager::resumeRealm(uint64_t id) {
@@ -707,7 +734,12 @@ std::expected<void, std::string> CRealmManager::resumeRealm(uint64_t id) {
     if (!signalProcessGroup(process->second, SIGCONT))
         return std::unexpected(std::format("failed resuming realm '{}': {}", realm->name(), strerror(errno)));
 
-    return realm->transitionTo(eRealmState::RUNNING);
+    auto transition = realm->transitionTo(eRealmState::RUNNING);
+    if (!transition)
+        return transition;
+
+    emitLifecycleEvent(eRealmLifecycleEvent::RESUMED, realm);
+    return {};
 }
 
 std::expected<void, std::string> CRealmManager::stopRealm(uint64_t id) {
@@ -742,10 +774,14 @@ void CRealmManager::handleProcessExit(CRealm& realm, SRealmProcess& process, int
 
     signalProcessGroup(process, SIGTERM);
 
-    if (realm.state() == eRealmState::STOPPING && !process.failOnExit)
-        realm.transitionTo(eRealmState::STOPPED);
-    else if (realm.state() != eRealmState::FAILED)
-        realm.transitionTo(eRealmState::FAILED);
+    auto realmPointer = realmByID(realm.id());
+    if (realm.state() == eRealmState::STOPPING && !process.failOnExit) {
+        if (realm.transitionTo(eRealmState::STOPPED))
+            emitLifecycleEvent(eRealmLifecycleEvent::STOPPED, realmPointer);
+    } else if (realm.state() != eRealmState::FAILED) {
+        if (realm.transitionTo(eRealmState::FAILED))
+            emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realmPointer);
+    }
 }
 
 void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
@@ -754,7 +790,8 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
 
     if (const auto socket = readyWaylandSocket(realm, realm.compositorPID()); socket) {
         realm.m_waylandSocket = *socket;
-        realm.transitionTo(eRealmState::RUNNING);
+        if (realm.transitionTo(eRealmState::RUNNING))
+            emitLifecycleEvent(eRealmLifecycleEvent::STARTED, realmByID(realm.id()));
         return;
     }
 
@@ -764,7 +801,8 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
     process.failOnExit          = true;
     process.terminationDeadline = std::chrono::steady_clock::now() + m_options.stopTimeout;
     realm.m_exitCode            = -1;
-    realm.transitionTo(eRealmState::FAILED);
+    if (realm.transitionTo(eRealmState::FAILED))
+        emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realmByID(realm.id()));
     signalProcessGroup(process, SIGTERM);
 }
 
@@ -886,6 +924,7 @@ std::expected<void, std::string> CRealmManager::destroyRealm(uint64_t id) {
     if (const auto cleaned = cleanupRuntime(*realm); !cleaned)
         return cleaned;
     std::erase(m_realms, realm);
+    emitLifecycleEvent(eRealmLifecycleEvent::DESTROYED, realm);
     return {};
 }
 
@@ -944,8 +983,8 @@ void CRealmManager::shutdownAll() {
 
         if (auto realm = realmByID(id); realm) {
             realm->m_compositorPID = 0;
-            if (realm->state() == eRealmState::STOPPING)
-                realm->transitionTo(eRealmState::STOPPED);
+            if (realm->state() == eRealmState::STOPPING && realm->transitionTo(eRealmState::STOPPED))
+                emitLifecycleEvent(eRealmLifecycleEvent::STOPPED, realm);
         }
     }
     m_processes.clear();

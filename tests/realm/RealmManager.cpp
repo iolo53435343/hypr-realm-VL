@@ -12,8 +12,19 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 using namespace Realm;
+
+TEST(RealmLifecycleEvent, namesAreStable) {
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::CREATED), "realmcreated");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::STARTED), "realmstarted");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::PAUSED), "realmpaused");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::RESUMED), "realmresumed");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::STOPPED), "realmstopped");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::FAILED), "realmfailed");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::DESTROYED), "realmdestroyed");
+}
 
 static bool waitForState(CRealmManager& manager, const SP<CRealm>& realm, eRealmState state, std::chrono::milliseconds timeout = std::chrono::seconds(3)) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -101,7 +112,10 @@ TEST_F(CRealmManagerTest, validatesNames) {
 }
 
 TEST_F(CRealmManagerTest, startsPausesResumesStopsAndDestroysRealm) {
-    auto created = m_manager->createRealm("lifecycle");
+    std::vector<eRealmLifecycleEvent> events;
+    auto                              lifecycleListener = m_manager->m_events.lifecycle.listen([&events](const SRealmLifecycleEvent& event) { events.emplace_back(event.type); });
+
+    auto                              created = m_manager->createRealm("lifecycle");
     ASSERT_TRUE(created);
     const auto realm = *created;
 
@@ -154,6 +168,17 @@ TEST_F(CRealmManagerTest, startsPausesResumesStopsAndDestroysRealm) {
     ASSERT_TRUE(destroyEventually(*m_manager, realm->id()));
     EXPECT_FALSE(std::filesystem::exists(runtime));
     EXPECT_FALSE(m_manager->realmByID(realm->id()));
+    EXPECT_EQ(events,
+              (std::vector<eRealmLifecycleEvent>{
+                  eRealmLifecycleEvent::CREATED,
+                  eRealmLifecycleEvent::STARTED,
+                  eRealmLifecycleEvent::PAUSED,
+                  eRealmLifecycleEvent::RESUMED,
+                  eRealmLifecycleEvent::STOPPED,
+                  eRealmLifecycleEvent::STARTED,
+                  eRealmLifecycleEvent::STOPPED,
+                  eRealmLifecycleEvent::DESTROYED,
+              }));
 }
 
 TEST_F(CRealmManagerTest, treatsNamesAsDataNotCommands) {
@@ -195,7 +220,10 @@ TEST_F(CRealmManagerTest, timesOutCompositorThatNeverBecomesReady) {
 }
 
 TEST_F(CRealmManagerTest, movesCrashedRealmToFailed) {
-    auto created = m_manager->createRealm("crash");
+    std::vector<eRealmLifecycleEvent> events;
+    auto                              lifecycleListener = m_manager->m_events.lifecycle.listen([&events](const SRealmLifecycleEvent& event) { events.emplace_back(event.type); });
+
+    auto                              created = m_manager->createRealm("crash");
     ASSERT_TRUE(created);
     const auto realm = *created;
 
@@ -204,6 +232,7 @@ TEST_F(CRealmManagerTest, movesCrashedRealmToFailed) {
     ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::FAILED));
     EXPECT_EQ(realm->exitCode(), 128 + SIGABRT);
     EXPECT_EQ(realm->compositorPID(), 0);
+    EXPECT_EQ(events, (std::vector<eRealmLifecycleEvent>{eRealmLifecycleEvent::CREATED, eRealmLifecycleEvent::STARTED, eRealmLifecycleEvent::FAILED}));
     EXPECT_TRUE(destroyEventually(*m_manager, realm->id()));
 }
 
