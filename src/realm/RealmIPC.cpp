@@ -12,7 +12,7 @@
 using namespace Hyprutils::String;
 using namespace Realm;
 
-static std::string realmJSON(const CRealm& realm) {
+std::string Realm::realmJSON(const CRealm& realm) {
     return std::format(
         R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","pid":{},"wayland_socket":"{}","runtime_directory":"{}","config_path":"{}","log_path":"{}","exit_code":{}}})",
         realm.id(), escapeJSONStrings(realm.name()), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()), realm.compositorPID(),

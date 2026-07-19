@@ -41,6 +41,7 @@
 #include "protocols/SecurityContext.hpp"
 #include "protocols/ColorManagement.hpp"
 #include "render/Renderer.hpp"
+#include "realm/RealmControlServer.hpp"
 #include "realm/RealmIPC.hpp"
 #include "realm/RealmManager.hpp"
 #include "realm/RealmWindowManager.hpp"
@@ -575,6 +576,7 @@ void CCompositor::cleanup() {
 
     // Realms are Wayland clients of this compositor. Stop them while the host
     // event loop and socket are still alive, before tearing down other managers.
+    Realm::controlServer().reset();
     Realm::ipc().reset();
     Realm::windowManager().reset();
     Realm::manager().reset();
@@ -768,6 +770,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
             Realm::manager()       = makeUnique<Realm::CRealmManager>();
             Realm::windowManager() = makeUnique<Realm::CRealmWindowManager>(*Realm::manager());
             Realm::ipc()           = makeUnique<Realm::CRealmIPC>(*Realm::manager(), *Realm::windowManager());
+            Realm::controlServer() = makeUnique<Realm::CRealmControlServer>(*Realm::manager(), *Realm::windowManager());
+            if (!Realm::controlServer()->isListening())
+                Log::logger->log(Log::ERR, "Failed to start the realm control socket: {}", Realm::controlServer()->lastError());
 
             Log::logger->log(Log::DEBUG, "Starting XWayland");
             g_pXWayland = makeUnique<CXWayland>(g_pCompositor->m_wantsXwayland);

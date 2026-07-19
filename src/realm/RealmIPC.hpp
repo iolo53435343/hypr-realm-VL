@@ -11,6 +11,7 @@ struct SHyprCtlCommand;
 namespace Realm {
     class CRealmWindowManager;
 
+    std::string realmJSON(const CRealm& realm);
     std::string realmListRequest(CRealmManager& manager, eHyprCtlOutputFormat format);
     std::string realmCommandRequest(CRealmManager& manager, CRealmWindowManager& windowManager, eHyprCtlOutputFormat format, const std::string& request);
     std::string realmLifecycleEventData(const SRealmLifecycleEvent& event);
