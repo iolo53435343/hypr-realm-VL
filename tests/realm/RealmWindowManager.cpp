@@ -108,12 +108,28 @@ TEST_F(CRealmWindowManagerTest, explicitHostWindowCloseStopsRealmCleanly) {
     EXPECT_FALSE(m_windowManager->handleCloseRequest(42));
 }
 
+TEST_F(CRealmWindowManagerTest, takeoverRequiresHostWindowAndReleaseRestoresAgent) {
+    const auto realm = startRealm("lease");
+    ASSERT_TRUE(realm);
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    EXPECT_FALSE(m_windowManager->takeoverRealm(realm->id()));
+
+    ASSERT_TRUE(m_windowManager->associateWindow(42, realm->compositorPID()));
+    ASSERT_TRUE(m_windowManager->takeoverRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::HUMAN);
+    EXPECT_FALSE(m_windowManager->takeoverRealm(realm->id()));
+
+    ASSERT_TRUE(m_windowManager->releaseRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    EXPECT_FALSE(m_windowManager->releaseRealm(realm->id()));
+}
+
 TEST(RealmWindowFormatting, includesEscapedInspectionMetadataAndReadableLabel) {
     const auto realm = makeShared<CRealm>(7, R"(codex "work")");
 
     EXPECT_EQ(realmWindowJSON({}), "null");
     EXPECT_EQ(realmWindowText({}), "none");
-    EXPECT_EQ(realmWindowJSON(realm), R"({"id":7,"name":"codex \"work\"","state":"stopped"})");
-    EXPECT_EQ(realmWindowText(realm), R"(codex "work" (7, stopped))");
-    EXPECT_EQ(realmWindowDecorationLabel(*realm), R"(Realm: codex "work" · stopped)");
+    EXPECT_EQ(realmWindowJSON(realm), R"({"id":7,"name":"codex \"work\"","state":"stopped","input_owner":"none"})");
+    EXPECT_EQ(realmWindowText(realm), R"(codex "work" (7, stopped, input: none))");
+    EXPECT_EQ(realmWindowDecorationLabel(*realm), R"(Realm: codex "work" · stopped · input: none)");
 }

@@ -44,6 +44,8 @@ std::string_view Realm::realmLifecycleEventName(eRealmLifecycleEvent event) {
         case eRealmLifecycleEvent::STOPPED: return "realmstopped";
         case eRealmLifecycleEvent::FAILED: return "realmfailed";
         case eRealmLifecycleEvent::DESTROYED: return "realmdestroyed";
+        case eRealmLifecycleEvent::TAKEN_OVER: return "realmtakeover";
+        case eRealmLifecycleEvent::RELEASED: return "realmrelease";
     }
 
     return "realmunknown";
@@ -493,6 +495,15 @@ void CRealmManager::emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRea
     m_events.lifecycle.emit(SRealmLifecycleEvent{.type = event, .realm = realm});
 }
 
+void CRealmManager::setInputOwner(const SP<CRealm>& realm, eRealmInputOwner owner) {
+    if (!realm || realm->m_inputOwner == owner)
+        return;
+
+    const auto previous = realm->m_inputOwner;
+    realm->m_inputOwner = owner;
+    m_events.inputOwner.emit(SRealmInputOwnerEvent{.realm = realm, .previous = previous, .owner = owner});
+}
+
 std::expected<void, std::string> CRealmManager::validateName(const std::string& name) const {
     if (name.empty())
         return std::unexpected("realm name cannot be empty");
@@ -655,6 +666,7 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
     if (!transition)
         return transition;
 
+    setInputOwner(realm, eRealmInputOwner::NONE);
     realm->m_exitCode = -1;
     if (const auto prepared = prepareRuntime(*realm); !prepared) {
         if (realm->transitionTo(eRealmState::FAILED))
@@ -717,8 +729,33 @@ std::expected<void, std::string> CRealmManager::pauseRealm(uint64_t id) {
     if (!transition)
         return transition;
 
+    setInputOwner(realm, eRealmInputOwner::NONE);
     emitLifecycleEvent(eRealmLifecycleEvent::PAUSED, realm);
     return {};
+}
+
+std::expected<size_t, std::string> CRealmManager::pauseAllRealms() {
+    size_t      paused = 0;
+    std::string errors;
+
+    for (const auto& realm : m_realms) {
+        if (realm->state() != eRealmState::RUNNING)
+            continue;
+
+        const auto result = pauseRealm(realm->id());
+        if (result) {
+            ++paused;
+            continue;
+        }
+
+        if (!errors.empty())
+            errors += "; ";
+        errors += result.error();
+    }
+
+    if (!errors.empty())
+        return std::unexpected(std::format("failed pausing all realms: {}", errors));
+    return paused;
 }
 
 std::expected<void, std::string> CRealmManager::resumeRealm(uint64_t id) {
@@ -738,6 +775,7 @@ std::expected<void, std::string> CRealmManager::resumeRealm(uint64_t id) {
     if (!transition)
         return transition;
 
+    setInputOwner(realm, eRealmInputOwner::AGENT);
     emitLifecycleEvent(eRealmLifecycleEvent::RESUMED, realm);
     return {};
 }
@@ -759,7 +797,61 @@ std::expected<void, std::string> CRealmManager::stopRealm(uint64_t id) {
         return std::unexpected(std::format("failed stopping realm '{}': {}", realm->name(), strerror(errno)));
 
     process->second.terminationDeadline = std::chrono::steady_clock::now() + m_options.stopTimeout;
-    return realm->transitionTo(eRealmState::STOPPING);
+    auto transition                     = realm->transitionTo(eRealmState::STOPPING);
+    if (transition)
+        setInputOwner(realm, eRealmInputOwner::NONE);
+    return transition;
+}
+
+std::expected<void, std::string> CRealmManager::killRealm(uint64_t id) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+
+    const auto process = m_processes.find(id);
+    if (process == m_processes.end())
+        return std::unexpected(std::format("realm '{}' has no active process", realm->name()));
+    if (!signalProcessGroup(process->second, SIGKILL))
+        return std::unexpected(std::format("failed killing realm '{}': {}", realm->name(), strerror(errno)));
+
+    if (realm->state() == eRealmState::CREATING || realm->state() == eRealmState::RUNNING || realm->state() == eRealmState::PAUSED) {
+        auto transition = realm->transitionTo(eRealmState::STOPPING);
+        if (!transition)
+            return transition;
+    }
+
+    setInputOwner(realm, eRealmInputOwner::NONE);
+    process->second.forceKillSent       = true;
+    process->second.terminationDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    return {};
+}
+
+std::expected<void, std::string> CRealmManager::takeoverRealm(uint64_t id) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->state() != eRealmState::RUNNING)
+        return std::unexpected(std::format("realm '{}' cannot be taken over while {}", realm->name(), realmStateName(realm->state())));
+    if (realm->inputOwner() != eRealmInputOwner::AGENT)
+        return std::unexpected(std::format("realm '{}' input is already owned by {}", realm->name(), realmInputOwnerName(realm->inputOwner())));
+
+    setInputOwner(realm, eRealmInputOwner::HUMAN);
+    emitLifecycleEvent(eRealmLifecycleEvent::TAKEN_OVER, realm);
+    return {};
+}
+
+std::expected<void, std::string> CRealmManager::releaseRealm(uint64_t id) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->state() != eRealmState::RUNNING)
+        return std::unexpected(std::format("realm '{}' cannot be released while {}", realm->name(), realmStateName(realm->state())));
+    if (realm->inputOwner() != eRealmInputOwner::HUMAN)
+        return std::unexpected(std::format("realm '{}' input is owned by {}, not human", realm->name(), realmInputOwnerName(realm->inputOwner())));
+
+    setInputOwner(realm, eRealmInputOwner::AGENT);
+    emitLifecycleEvent(eRealmLifecycleEvent::RELEASED, realm);
+    return {};
 }
 
 void CRealmManager::handleProcessExit(CRealm& realm, SRealmProcess& process, int exitCode) {
@@ -772,9 +864,10 @@ void CRealmManager::handleProcessExit(CRealm& realm, SRealmProcess& process, int
     realm.m_compositorPID       = 0;
     process.terminationDeadline = std::chrono::steady_clock::now() + m_options.stopTimeout;
 
+    auto realmPointer = realmByID(realm.id());
+    setInputOwner(realmPointer, eRealmInputOwner::NONE);
     signalProcessGroup(process, SIGTERM);
 
-    auto realmPointer = realmByID(realm.id());
     if (realm.state() == eRealmState::STOPPING && !process.failOnExit) {
         if (realm.transitionTo(eRealmState::STOPPED))
             emitLifecycleEvent(eRealmLifecycleEvent::STOPPED, realmPointer);
@@ -790,8 +883,11 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
 
     if (const auto socket = readyWaylandSocket(realm, realm.compositorPID()); socket) {
         realm.m_waylandSocket = *socket;
-        if (realm.transitionTo(eRealmState::RUNNING))
-            emitLifecycleEvent(eRealmLifecycleEvent::STARTED, realmByID(realm.id()));
+        if (realm.transitionTo(eRealmState::RUNNING)) {
+            const auto realmPointer = realmByID(realm.id());
+            setInputOwner(realmPointer, eRealmInputOwner::AGENT);
+            emitLifecycleEvent(eRealmLifecycleEvent::STARTED, realmPointer);
+        }
         return;
     }
 
@@ -801,8 +897,11 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
     process.failOnExit          = true;
     process.terminationDeadline = std::chrono::steady_clock::now() + m_options.stopTimeout;
     realm.m_exitCode            = -1;
-    if (realm.transitionTo(eRealmState::FAILED))
-        emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realmByID(realm.id()));
+    if (realm.transitionTo(eRealmState::FAILED)) {
+        const auto realmPointer = realmByID(realm.id());
+        setInputOwner(realmPointer, eRealmInputOwner::NONE);
+        emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realmPointer);
+    }
     signalProcessGroup(process, SIGTERM);
 }
 
@@ -966,8 +1065,10 @@ void CRealmManager::shutdownAll() {
         signalProcessGroup(process, SIGTERM);
         process.terminationDeadline = stopDeadline;
 
-        if (realm && (realm->state() == eRealmState::CREATING || realm->state() == eRealmState::RUNNING || realm->state() == eRealmState::PAUSED))
+        if (realm && (realm->state() == eRealmState::CREATING || realm->state() == eRealmState::RUNNING || realm->state() == eRealmState::PAUSED)) {
             realm->transitionTo(eRealmState::STOPPING);
+            setInputOwner(realm, eRealmInputOwner::NONE);
+        }
     }
 
     while (!m_processes.empty() && std::chrono::steady_clock::now() < stopDeadline) {

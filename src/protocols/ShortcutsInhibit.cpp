@@ -2,6 +2,7 @@
 #include <algorithm>
 #include "../Compositor.hpp"
 #include "../desktop/state/FocusState.hpp"
+#include "../realm/RealmWindowManager.hpp"
 #include "core/Compositor.hpp"
 
 CKeyboardShortcutsInhibitor::CKeyboardShortcutsInhibitor(SP<CZwpKeyboardShortcutsInhibitorV1> resource_, SP<CWLSurfaceResource> surf) : m_resource(resource_), m_surface(surf) {
@@ -71,9 +72,13 @@ bool CKeyboardShortcutsInhibitProtocol::isInhibited() {
     if (!Desktop::focusState()->surface())
         return false;
 
-    if (const auto PWINDOW = Desktop::viewState()->query().type(Desktop::View::VIEW_TYPE_WINDOW).surface(Desktop::focusState()->surface()).runWindow();
-        PWINDOW && PWINDOW->m_ruleApplicator->noShortcutsInhibit().valueOrDefault())
-        return false;
+    if (const auto PWINDOW = Desktop::viewState()->query().type(Desktop::View::VIEW_TYPE_WINDOW).surface(Desktop::focusState()->surface()).runWindow(); PWINDOW) {
+        if (PWINDOW->m_ruleApplicator->noShortcutsInhibit().valueOrDefault())
+            return false;
+        // A realm must never suppress host safety bindings during takeover.
+        if (Realm::windowManager() && Realm::windowManager()->realmForWindow(PWINDOW->m_stableID))
+            return false;
+    }
 
     for (auto const& in : m_inhibitors) {
         if (in->surface() != Desktop::focusState()->surface())

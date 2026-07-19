@@ -24,6 +24,8 @@ TEST(RealmLifecycleEvent, namesAreStable) {
     EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::STOPPED), "realmstopped");
     EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::FAILED), "realmfailed");
     EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::DESTROYED), "realmdestroyed");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::TAKEN_OVER), "realmtakeover");
+    EXPECT_EQ(realmLifecycleEventName(eRealmLifecycleEvent::RELEASED), "realmrelease");
 }
 
 static bool waitForState(CRealmManager& manager, const SP<CRealm>& realm, eRealmState state, std::chrono::milliseconds timeout = std::chrono::seconds(3)) {
@@ -179,6 +181,91 @@ TEST_F(CRealmManagerTest, startsPausesResumesStopsAndDestroysRealm) {
                   eRealmLifecycleEvent::STOPPED,
                   eRealmLifecycleEvent::DESTROYED,
               }));
+}
+
+TEST_F(CRealmManagerTest, maintainsExclusiveInputOwnershipAcrossLifecycle) {
+    std::vector<eRealmInputOwner> owners;
+    auto                          inputOwnerListener = m_manager->m_events.inputOwner.listen([&owners](const SRealmInputOwnerEvent& event) { owners.emplace_back(event.owner); });
+
+    auto                          created = m_manager->createRealm("ownership");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::NONE);
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+
+    ASSERT_TRUE(m_manager->takeoverRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::HUMAN);
+    EXPECT_FALSE(m_manager->takeoverRealm(realm->id()));
+
+    ASSERT_TRUE(m_manager->releaseRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    EXPECT_FALSE(m_manager->releaseRealm(realm->id()));
+
+    ASSERT_TRUE(m_manager->pauseRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::NONE);
+    EXPECT_FALSE(m_manager->takeoverRealm(realm->id()));
+
+    ASSERT_TRUE(m_manager->resumeRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    ASSERT_TRUE(m_manager->takeoverRealm(realm->id()));
+    ASSERT_TRUE(m_manager->stopRealm(realm->id()));
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::NONE);
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::STOPPED));
+
+    EXPECT_EQ(owners,
+              (std::vector<eRealmInputOwner>{
+                  eRealmInputOwner::AGENT,
+                  eRealmInputOwner::HUMAN,
+                  eRealmInputOwner::AGENT,
+                  eRealmInputOwner::NONE,
+                  eRealmInputOwner::AGENT,
+                  eRealmInputOwner::HUMAN,
+                  eRealmInputOwner::NONE,
+              }));
+}
+
+TEST_F(CRealmManagerTest, emergencyPauseStopsAutomationInEveryRunningRealm) {
+    auto firstCreated  = m_manager->createRealm("emergency-first");
+    auto secondCreated = m_manager->createRealm("emergency-second");
+    ASSERT_TRUE(firstCreated);
+    ASSERT_TRUE(secondCreated);
+    const auto first  = *firstCreated;
+    const auto second = *secondCreated;
+
+    ASSERT_TRUE(m_manager->startRealm(first->id()));
+    ASSERT_TRUE(m_manager->startRealm(second->id()));
+    ASSERT_TRUE(waitForState(*m_manager, first, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForState(*m_manager, second, eRealmState::RUNNING));
+    ASSERT_TRUE(m_manager->takeoverRealm(first->id()));
+
+    const auto paused = m_manager->pauseAllRealms();
+    ASSERT_TRUE(paused);
+    EXPECT_EQ(*paused, 2);
+    EXPECT_EQ(first->state(), eRealmState::PAUSED);
+    EXPECT_EQ(second->state(), eRealmState::PAUSED);
+    EXPECT_EQ(first->inputOwner(), eRealmInputOwner::NONE);
+    EXPECT_EQ(second->inputOwner(), eRealmInputOwner::NONE);
+
+    const auto repeated = m_manager->pauseAllRealms();
+    ASSERT_TRUE(repeated);
+    EXPECT_EQ(*repeated, 0);
+}
+
+TEST_F(CRealmManagerTest, forceKillUsesSupervisedCleanup) {
+    auto created = m_manager->createRealm("force-kill");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(m_manager->killRealm(realm->id()));
+    EXPECT_EQ(realm->state(), eRealmState::STOPPING);
+    EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::NONE);
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::STOPPED));
+    EXPECT_EQ(realm->exitCode(), 128 + SIGKILL);
 }
 
 TEST_F(CRealmManagerTest, treatsNamesAsDataNotCommands) {

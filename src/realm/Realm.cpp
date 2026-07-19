@@ -18,6 +18,16 @@ std::string_view Realm::realmStateName(eRealmState state) {
     return "unknown";
 }
 
+std::string_view Realm::realmInputOwnerName(eRealmInputOwner owner) {
+    switch (owner) {
+        case eRealmInputOwner::AGENT: return "agent";
+        case eRealmInputOwner::HUMAN: return "human";
+        case eRealmInputOwner::NONE: return "none";
+    }
+
+    return "unknown";
+}
+
 CRealm::CRealm(uint64_t id, std::string name) : m_id(id), m_name(std::move(name)) {
     ;
 }
@@ -56,6 +66,10 @@ const std::string& CRealm::logPath() const {
 
 int CRealm::exitCode() const {
     return m_exitCode;
+}
+
+eRealmInputOwner CRealm::inputOwner() const {
+    return m_inputOwner;
 }
 
 std::expected<void, std::string> CRealm::transitionTo(eRealmState state) {

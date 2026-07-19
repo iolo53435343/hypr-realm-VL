@@ -12,6 +12,7 @@
 #include "../errorOverlay/Overlay.hpp"
 #include "KeybindManager.hpp"
 #include "../pointer/PointerManager.hpp"
+#include "../realm/RealmDispatchers.hpp"
 #include "Compositor.hpp"
 #include "eventLoop/EventLoopManager.hpp"
 #include "debug/log/Logger.hpp"
@@ -112,6 +113,11 @@ CKeybindManager::CKeybindManager() {
                              "releaseinputcapture"}) {
         m_dispatchers[name] = [n = std::string(name)](std::string args) -> SDispatchResult { return Config::Legacy::translator()->run(n, args); };
     }
+
+    m_dispatchers["realmtakeover"] = Realm::realmTakeoverDispatcher;
+    m_dispatchers["realmrelease"]  = Realm::realmReleaseDispatcher;
+    m_dispatchers["realmpause"]    = Realm::realmPauseDispatcher;
+    m_dispatchers["realmkill"]     = Realm::realmKillDispatcher;
 
     m_scrollTimer.reset();
 

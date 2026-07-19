@@ -10,12 +10,19 @@ TEST(Realm, initializesStoppedWithSafeDefaults) {
     EXPECT_EQ(realm.id(), 42);
     EXPECT_EQ(realm.name(), "codex");
     EXPECT_EQ(realm.state(), eRealmState::STOPPED);
+    EXPECT_EQ(realm.inputOwner(), eRealmInputOwner::NONE);
     EXPECT_EQ(realm.compositorPID(), 0);
     EXPECT_EQ(realm.exitCode(), -1);
     EXPECT_TRUE(realm.runtimeDirectory().empty());
     EXPECT_TRUE(realm.waylandSocket().empty());
     EXPECT_TRUE(realm.configPath().empty());
     EXPECT_TRUE(realm.logPath().empty());
+}
+
+TEST(Realm, inputOwnerNamesAreStable) {
+    EXPECT_EQ(realmInputOwnerName(eRealmInputOwner::AGENT), "agent");
+    EXPECT_EQ(realmInputOwnerName(eRealmInputOwner::HUMAN), "human");
+    EXPECT_EQ(realmInputOwnerName(eRealmInputOwner::NONE), "none");
 }
 
 TEST(Realm, stateNamesAreStable) {

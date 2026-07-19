@@ -22,9 +22,13 @@ namespace Realm {
         SP<CRealm>                             realmForWindow(uint64_t windowID) const;
         std::optional<uint64_t>                windowForRealm(uint64_t realmID) const;
         std::expected<void, std::string>       handleCloseRequest(uint64_t windowID);
+        std::expected<void, std::string>       takeoverRealm(uint64_t realmID);
+        std::expected<void, std::string>       releaseRealm(uint64_t realmID);
 
       private:
         struct SImpl;
+
+        void           updateWindowInputOwner(const SP<CRealm>& realm);
 
         CRealmManager& m_manager;
         UP<SImpl>      m_impl;

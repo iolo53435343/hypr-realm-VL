@@ -26,6 +26,8 @@ namespace Realm {
         STOPPED,
         FAILED,
         DESTROYED,
+        TAKEN_OVER,
+        RELEASED,
     };
 
     std::string_view realmLifecycleEventName(eRealmLifecycleEvent event);
@@ -33,6 +35,12 @@ namespace Realm {
     struct SRealmLifecycleEvent {
         eRealmLifecycleEvent type = eRealmLifecycleEvent::CREATED;
         SP<CRealm>           realm;
+    };
+
+    struct SRealmInputOwnerEvent {
+        SP<CRealm>       realm;
+        eRealmInputOwner previous = eRealmInputOwner::NONE;
+        eRealmInputOwner owner    = eRealmInputOwner::NONE;
     };
 
     struct SRealmManagerOptions {
@@ -53,8 +61,12 @@ namespace Realm {
         std::expected<SP<CRealm>, std::string> createRealm(const std::string& name);
         std::expected<void, std::string>       startRealm(uint64_t id);
         std::expected<void, std::string>       pauseRealm(uint64_t id);
+        std::expected<size_t, std::string>     pauseAllRealms();
         std::expected<void, std::string>       resumeRealm(uint64_t id);
         std::expected<void, std::string>       stopRealm(uint64_t id);
+        std::expected<void, std::string>       killRealm(uint64_t id);
+        std::expected<void, std::string>       takeoverRealm(uint64_t id);
+        std::expected<void, std::string>       releaseRealm(uint64_t id);
         std::expected<void, std::string>       destroyRealm(uint64_t id);
 
         SP<CRealm>                             realmByID(uint64_t id) const;
@@ -66,7 +78,8 @@ namespace Realm {
         void                                   shutdownAll();
 
         struct {
-            CSignalT<SRealmLifecycleEvent> lifecycle;
+            CSignalT<SRealmLifecycleEvent>  lifecycle;
+            CSignalT<SRealmInputOwnerEvent> inputOwner;
         } m_events;
 
       private:
@@ -101,6 +114,7 @@ namespace Realm {
         bool                                      signalProcessGroup(const SRealmProcess& process, int signal) const;
         void                                      setupPollTimer();
         void                                      emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRealm>& realm);
+        void                                      setInputOwner(const SP<CRealm>& realm, eRealmInputOwner owner);
 
         SRealmManagerOptions                      m_options;
         std::vector<SP<CRealm>>                   m_realms;

@@ -13,6 +13,7 @@
 #include "../../../state/WorkspaceState.hpp"
 #include "../../../devices/IKeyboard.hpp"
 #include "../../../desktop/rule/windowRule/WindowRule.hpp"
+#include "../../../realm/RealmDispatchers.hpp"
 #include "config/shared/actions/ConfigActions.hpp"
 
 using namespace Config;
@@ -228,6 +229,62 @@ static int dsp_forceIdle(lua_State* L) {
 
 static int dsp_releaseInputCapture(lua_State* L) {
     return Internal::checkResult(L, CA::releaseInputCapture());
+}
+
+enum class eRealmDispatcherAction : uint8_t {
+    TAKEOVER = 0,
+    RELEASE,
+    PAUSE,
+    KILL,
+};
+
+static int dsp_realm(lua_State* L) {
+    const auto      action    = sc<eRealmDispatcherAction>(lua_tointeger(L, lua_upvalueindex(1)));
+    const auto      arguments = std::string{lua_tostring(L, lua_upvalueindex(2))};
+
+    SDispatchResult result;
+    switch (action) {
+        case eRealmDispatcherAction::TAKEOVER: result = Realm::realmTakeoverDispatcher(arguments); break;
+        case eRealmDispatcherAction::RELEASE: result = Realm::realmReleaseDispatcher(arguments); break;
+        case eRealmDispatcherAction::PAUSE: result = Realm::realmPauseDispatcher(arguments); break;
+        case eRealmDispatcherAction::KILL: result = Realm::realmKillDispatcher(arguments); break;
+    }
+
+    if (!result.success)
+        return Internal::dispatcherError(L, result.error, ERR, C_EXECFAIL);
+    return Internal::pushSuccessResult(L);
+}
+
+static int makeRealmDispatcher(lua_State* L, eRealmDispatcherAction action, bool optionalName, std::string_view functionName) {
+    std::string name;
+    if (!lua_isnoneornil(L, 1)) {
+        const auto checkedName = Check::string(L, 1);
+        if (!checkedName)
+            return Internal::configError(L, std::format("{}: bad argument 1: {}", functionName, checkedName.error()));
+        name = *checkedName;
+    } else if (!optionalName)
+        return Internal::configError(L, std::format("{}: realm name is required", functionName));
+
+    lua_pushinteger(L, sc<lua_Integer>(action));
+    lua_pushlstring(L, name.data(), name.size());
+    lua_pushcclosure(L, dsp_realm, 2);
+    return 1;
+}
+
+static int hlRealmTakeover(lua_State* L) {
+    return makeRealmDispatcher(L, eRealmDispatcherAction::TAKEOVER, false, "hl.dsp.realm.takeover");
+}
+
+static int hlRealmRelease(lua_State* L) {
+    return makeRealmDispatcher(L, eRealmDispatcherAction::RELEASE, false, "hl.dsp.realm.release");
+}
+
+static int hlRealmPause(lua_State* L) {
+    return makeRealmDispatcher(L, eRealmDispatcherAction::PAUSE, true, "hl.dsp.realm.pause");
+}
+
+static int hlRealmKill(lua_State* L) {
+    return makeRealmDispatcher(L, eRealmDispatcherAction::KILL, false, "hl.dsp.realm.kill");
 }
 
 static int hlExecCmd(lua_State* L) {
@@ -1395,6 +1452,14 @@ void Internal::registerDispatcherBindings(lua_State* L) {
         Internal::setFn(L, "swap_monitors", hlWorkspaceSwapMonitors);
         Internal::setFn(L, "toggle_special", hlWorkspaceToggleSpecial);
         lua_setfield(L, -2, "workspace");
+
+        lua_newtable(L);
+        Internal::markDispatcherTable(L);
+        Internal::setFn(L, "takeover", hlRealmTakeover);
+        Internal::setFn(L, "release", hlRealmRelease);
+        Internal::setFn(L, "pause", hlRealmPause);
+        Internal::setFn(L, "kill", hlRealmKill);
+        lua_setfield(L, -2, "realm");
 
         Internal::setFn(L, "exec_cmd", hlExecCmd);
         Internal::setFn(L, "exec_raw", hlExecRaw);

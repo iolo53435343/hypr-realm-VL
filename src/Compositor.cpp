@@ -767,7 +767,7 @@ void CCompositor::initManagers(eManagersInitStage stage) {
             Log::logger->log(Log::DEBUG, "Creating the RealmManager!");
             Realm::manager()       = makeUnique<Realm::CRealmManager>();
             Realm::windowManager() = makeUnique<Realm::CRealmWindowManager>(*Realm::manager());
-            Realm::ipc()           = makeUnique<Realm::CRealmIPC>(*Realm::manager());
+            Realm::ipc()           = makeUnique<Realm::CRealmIPC>(*Realm::manager(), *Realm::windowManager());
 
             Log::logger->log(Log::DEBUG, "Starting XWayland");
             g_pXWayland = makeUnique<CXWayland>(g_pCompositor->m_wantsXwayland);

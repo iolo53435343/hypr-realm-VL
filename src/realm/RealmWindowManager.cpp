@@ -2,6 +2,7 @@
 
 #include "RealmDecoration.hpp"
 #include "../debug/log/Logger.hpp"
+#include "../desktop/state/FocusState.hpp"
 #include "../desktop/view/Window.hpp"
 #include "../event/EventBus.hpp"
 #include "../helpers/MiscFunctions.hpp"
@@ -20,6 +21,7 @@ struct CRealmWindowManager::SImpl {
     CHyprSignalListener                        windowCloseListener;
     CHyprSignalListener                        windowCloseRequestListener;
     CHyprSignalListener                        lifecycleListener;
+    CHyprSignalListener                        inputOwnerListener;
 };
 
 CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowManagerOptions options) : m_manager(manager), m_impl(makeUnique<SImpl>()) {
@@ -46,6 +48,7 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         auto decoration                         = makeUnique<CRealmDecoration>(window, *associated);
         m_impl->decorations[window->m_stableID] = decoration.get();
         window->addWindowDeco(std::move(decoration));
+        updateWindowInputOwner(*associated);
     });
 
     m_impl->windowCloseListener = Event::bus()->m_events.window.close.listen([this](PHLWINDOW window) {
@@ -57,8 +60,8 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
             window->removeWindowDeco(decoration->second);
             m_impl->decorations.erase(decoration);
         }
-        m_impl->windows.erase(window->m_stableID);
         dissociateWindow(window->m_stableID);
+        m_impl->windows.erase(window->m_stableID);
     });
 
     m_impl->windowCloseRequestListener = Event::bus()->m_events.window.requestClose.listen([this](PHLWINDOW window) {
@@ -90,9 +93,11 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         if (window && decoration != m_impl->decorations.end())
             window->removeWindowDeco(decoration->second);
         m_impl->decorations.erase(*windowID);
-        m_impl->windows.erase(*windowID);
         dissociateWindow(*windowID);
+        m_impl->windows.erase(*windowID);
     });
+
+    m_impl->inputOwnerListener = m_manager.m_events.inputOwner.listen([this](const SRealmInputOwnerEvent& event) { updateWindowInputOwner(event.realm); });
 }
 
 CRealmWindowManager::~CRealmWindowManager() = default;
@@ -124,6 +129,11 @@ void CRealmWindowManager::dissociateWindow(uint64_t windowID) {
     if (associated == m_impl->windowToRealm.end())
         return;
 
+    const auto windowIterator = m_impl->windows.find(windowID);
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, false);
+
     m_impl->realmToWindow.erase(associated->second);
     m_impl->windowToRealm.erase(associated);
 }
@@ -149,20 +159,76 @@ std::expected<void, std::string> CRealmWindowManager::handleCloseRequest(uint64_
     return {};
 }
 
+void CRealmWindowManager::updateWindowInputOwner(const SP<CRealm>& realm) {
+    if (!realm)
+        return;
+
+    const auto windowID = windowForRealm(realm->id());
+    if (!windowID)
+        return;
+
+    const auto windowIterator = m_impl->windows.find(*windowID);
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (!window)
+        return;
+
+    window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, realm->inputOwner() != eRealmInputOwner::HUMAN);
+    window->updateWindowDecos();
+}
+
+std::expected<void, std::string> CRealmWindowManager::takeoverRealm(uint64_t realmID) {
+    const auto realm = m_manager.realmByID(realmID);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", realmID));
+    if (!windowForRealm(realmID))
+        return std::unexpected(std::format("realm '{}' has no host window", realm->name()));
+
+    auto result = m_manager.takeoverRealm(realmID);
+    if (!result)
+        return result;
+
+    const auto windowID       = windowForRealm(realmID);
+    const auto windowIterator = windowID ? m_impl->windows.find(*windowID) : m_impl->windows.end();
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        Desktop::focusState()->fullWindowFocus(window, Desktop::FOCUS_REASON_KEYBIND);
+    return {};
+}
+
+std::expected<void, std::string> CRealmWindowManager::releaseRealm(uint64_t realmID) {
+    const auto realm = m_manager.realmByID(realmID);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", realmID));
+    if (!windowForRealm(realmID))
+        return std::unexpected(std::format("realm '{}' has no host window", realm->name()));
+
+    const auto windowID       = windowForRealm(realmID);
+    const auto windowIterator = windowID ? m_impl->windows.find(*windowID) : m_impl->windows.end();
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, true);
+
+    auto result = m_manager.releaseRealm(realmID);
+    if (!result && window && realm->inputOwner() == eRealmInputOwner::HUMAN)
+        window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, false);
+    return result;
+}
+
 std::string Realm::realmWindowJSON(const SP<CRealm>& realm) {
     if (!realm)
         return "null";
-    return std::format(R"({{"id":{},"name":"{}","state":"{}"}})", realm->id(), escapeJSONStrings(realm->name()), realmStateName(realm->state()));
+    return std::format(R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}"}})", realm->id(), escapeJSONStrings(realm->name()), realmStateName(realm->state()),
+                       realmInputOwnerName(realm->inputOwner()));
 }
 
 std::string Realm::realmWindowText(const SP<CRealm>& realm) {
     if (!realm)
         return "none";
-    return std::format("{} ({}, {})", realm->name(), realm->id(), realmStateName(realm->state()));
+    return std::format("{} ({}, {}, input: {})", realm->name(), realm->id(), realmStateName(realm->state()), realmInputOwnerName(realm->inputOwner()));
 }
 
 std::string Realm::realmWindowDecorationLabel(const CRealm& realm) {
-    return std::format("Realm: {} · {}", realm.name(), realmStateName(realm.state()));
+    return std::format("Realm: {} · {} · input: {}", realm.name(), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()));
 }
 
 UP<CRealmWindowManager>& Realm::windowManager() {

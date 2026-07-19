@@ -302,6 +302,26 @@ TEST(ConfigLuaBindingsInternal, pluginBindingIsTableWithLoadFunction) {
     lua_pop(L, 2);
 }
 
+TEST(ConfigLuaBindingsInternal, realmDispatcherFactoriesAreAvailable) {
+    CLuaState  S;
+    const auto L = S.get();
+
+    lua_newtable(L);
+    Internal::registerDispatcherBindings(L);
+    lua_setglobal(L, "hl");
+
+    ASSERT_EQ(luaL_dostring(L, R"(
+        assert(hl.dsp.realm ~= nil)
+        assert(hl.dsp.realm.takeover("codex") ~= nil)
+        assert(hl.dsp.realm.release("codex") ~= nil)
+        assert(hl.dsp.realm.pause() ~= nil)
+        assert(hl.dsp.realm.pause("codex") ~= nil)
+        assert(hl.dsp.realm.kill("codex") ~= nil)
+    )"),
+              LUA_OK)
+        << lua_tostring(L, -1);
+}
+
 TEST(ConfigLuaBindingsInternal, pluginLuaFnIsUnloadedWithoutDanglingCall) {
     CLuaState  S;
     const auto L = S.get();
