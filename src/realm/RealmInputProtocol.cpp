@@ -7,7 +7,7 @@
 using namespace Realm;
 
 static constexpr uint32_t REALM_INPUT_PROTOCOL_MAGIC   = 0x48524149;
-static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 1;
+static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 2;
 static constexpr size_t   REALM_INPUT_HEADER_SIZE      = 16;
 static constexpr size_t   REALM_INPUT_MAX_PACKET_SIZE  = REALM_INPUT_HEADER_SIZE + REALM_INPUT_MAX_TEXT_SIZE;
 
@@ -53,7 +53,9 @@ static bool isKnownType(eRealmInputMessageType type) {
         case eRealmInputMessageType::CAPTURE:
         case eRealmInputMessageType::CAPTURE_REGION:
         case eRealmInputMessageType::CAPTURE_READY:
-        case eRealmInputMessageType::CAPTURE_CANCEL: return true;
+        case eRealmInputMessageType::CAPTURE_CANCEL:
+        case eRealmInputMessageType::POINTER_CLICK:
+        case eRealmInputMessageType::KEYBOARD_PRESS: return true;
     }
 
     return false;
@@ -99,6 +101,8 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
             appendUint32(payload, message.pressed ? 1 : 0);
             break;
         }
+        case eRealmInputMessageType::POINTER_CLICK:
+        case eRealmInputMessageType::KEYBOARD_PRESS: appendUint32(payload, message.code); break;
         case eRealmInputMessageType::POINTER_SCROLL: {
             appendUint32(payload, static_cast<uint32_t>(message.horizontal));
             appendUint32(payload, static_cast<uint32_t>(message.vertical));
@@ -211,6 +215,12 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
                 return std::unexpected("realm input pressed state must be zero or one");
             message.pressed = readUint32(payload + 4) == 1;
             break;
+        case eRealmInputMessageType::POINTER_CLICK:
+        case eRealmInputMessageType::KEYBOARD_PRESS:
+            if (payloadSize != 4)
+                return std::unexpected("realm input atomic key or button payload has an invalid length");
+            message.code = readUint32(payload);
+            break;
         case eRealmInputMessageType::POINTER_SCROLL:
             if (payloadSize != 8)
                 return std::unexpected("pointer scroll payload has an invalid length");
@@ -251,8 +261,10 @@ bool Realm::realmInputMessageIsInputCommand(eRealmInputMessageType type) {
     switch (type) {
         case eRealmInputMessageType::POINTER_MOVE:
         case eRealmInputMessageType::POINTER_BUTTON:
+        case eRealmInputMessageType::POINTER_CLICK:
         case eRealmInputMessageType::POINTER_SCROLL:
         case eRealmInputMessageType::KEYBOARD_KEY:
+        case eRealmInputMessageType::KEYBOARD_PRESS:
         case eRealmInputMessageType::KEYBOARD_TYPE: return true;
         default: return false;
     }

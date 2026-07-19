@@ -287,6 +287,10 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
     EXPECT_TRUE(response.contains(R"("ok":true)"));
     EXPECT_TRUE(response.contains(R"("action":"queued")"));
     ASSERT_TRUE(waitForControllerLog(*realm, "KEYBOARD_TYPE"));
+    response =
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"1-press","method":"keyboard.press","params":{"realm":"input","keycode":30}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "KEYBOARD_PRESS"));
 
     ASSERT_TRUE(m_windowManager->associateWindow(42, realm->compositorPID()));
     response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"2","method":"realm.takeover","params":{"realm":"input"}})");
@@ -304,6 +308,10 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
                                    R"({"request_id":"4-granted","method":"pointer.move","params":{"realm":"input","x":10,"y":20}})");
     EXPECT_TRUE(response.contains(R"("ok":true)"));
     ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_MOVE"));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                   R"({"request_id":"4-click","method":"pointer.click","params":{"realm":"input","button":"left"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_CLICK"));
 
     ASSERT_TRUE(m_manager->stopRealm(realm->id()));
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::STOPPED));
@@ -442,6 +450,12 @@ TEST_F(CRealmControlServerTest, validatesInputShapesAndBoundsBeforeRouting) {
                     .contains(R"("code":"invalid_params")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
                                     R"({"request_id":"6","method":"realm.capture_region","params":{"realm":"validation","x":1200,"y":0,"width":100,"height":100}})")
+                    .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                    R"({"request_id":"7","method":"pointer.click","params":{"realm":"validation","button":"left","pressed":true}})")
+                    .contains(R"("code":"invalid_params")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                    R"({"request_id":"8","method":"keyboard.press","params":{"realm":"validation","keycode":30,"pressed":true}})")
                     .contains(R"("code":"invalid_params")"));
 }
 

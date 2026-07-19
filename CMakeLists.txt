@@ -615,6 +615,7 @@ protocolwayland()
 find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
 pkg_check_modules(realm_controller_deps REQUIRED IMPORTED_TARGET wayland-client
                   xkbcommon)
+pkg_check_modules(realm_mcp_deps REQUIRED IMPORTED_TARGET cairo)
 
 set(REALM_CONTROLLER_PROTOCOL_DIR
     "${CMAKE_CURRENT_BINARY_DIR}/realm-agent-controller-protocols")
@@ -658,6 +659,15 @@ target_include_directories(hyprland-realm-agent-controller
 target_link_libraries(hyprland-realm-agent-controller
                       PRIVATE PkgConfig::realm_controller_deps)
 
+add_executable(
+  hyprland-realm-mcp-server
+  tools/realm-mcp-server/main.cpp
+  tools/realm-mcp-server/MCPServer.cpp
+  tools/realm-mcp-server/RealmControlClient.cpp)
+target_link_libraries(
+  hyprland-realm-mcp-server
+  PRIVATE glaze::glaze PkgConfig::realm_mcp_deps PkgConfig::hyprutils_dep)
+
 # tools
 add_subdirectory(hyprctl)
 add_subdirectory(start)
@@ -676,7 +686,8 @@ set(CMAKE_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     WORLD_READ WORLD_EXECUTE)
 
 # binaries and symlink
-install(TARGETS Hyprland hyprland-realm-agent-controller)
+install(TARGETS Hyprland hyprland-realm-agent-controller
+                hyprland-realm-mcp-server)
 
 install(
   CODE "execute_process( \
@@ -775,6 +786,15 @@ if(BUILD_TESTING OR WITH_TESTS)
 
   gtest_discover_tests(hyprland_gtests)
 
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME RealmMCPServer
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/realm/RealmMCPServer.py
+        $<TARGET_FILE:hyprland-realm-mcp-server>)
+  endif()
+
   # Enable coverage in main hyprland lib
   target_compile_options(hyprland_lib PRIVATE --coverage)
   target_link_options(hyprland_lib PRIVATE --coverage)
@@ -792,7 +812,7 @@ if(BUILD_TESTING)
   enable_testing()
   add_custom_target(tests)
 
-  add_dependencies(tests hyprland_gtests)
+  add_dependencies(tests hyprland_gtests hyprland-realm-mcp-server)
 
 else()
   message(STATUS "Testing is disabled")

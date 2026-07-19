@@ -524,6 +524,11 @@ struct CWaylandInput::SImpl {
                 else
                     pressedButtons.erase(message.code);
                 return flush();
+            case eRealmInputMessageType::POINTER_CLICK:
+                zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_frame(pointer);
+                return flush();
             case eRealmInputMessageType::POINTER_SCROLL:
                 zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
                 if (message.vertical != 0)
@@ -538,6 +543,10 @@ struct CWaylandInput::SImpl {
                     pressedKeys.emplace(message.code);
                 else
                     pressedKeys.erase(message.code);
+                return flush();
+            case eRealmInputMessageType::KEYBOARD_PRESS:
+                zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_PRESSED);
+                zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_RELEASED);
                 return flush();
             case eRealmInputMessageType::KEYBOARD_TYPE: return typeText(message.text);
             case eRealmInputMessageType::CAPTURE:

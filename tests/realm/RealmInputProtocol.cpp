@@ -21,6 +21,8 @@ TEST(RealmInputProtocol, roundTripsEveryCommandShape) {
         SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_REGION, .sequence = 10, .x = 10, .y = 20, .width = 300, .height = 200},
         SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_READY, .sequence = 10, .width = 300, .height = 200, .format = 1, .stride = 1200, .flags = 1, .byteSize = 240000},
         SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_CANCEL, .sequence = 10},
+        SRealmInputMessage{.type = eRealmInputMessageType::POINTER_CLICK, .sequence = 11, .code = 272},
+        SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_PRESS, .sequence = 12, .code = 30},
     };
 
     for (const auto& message : messages) {
@@ -58,7 +60,7 @@ TEST(RealmInputProtocol, rejectsMalformedAndOversizedPackets) {
     EXPECT_FALSE(decodeRealmInputMessage(badMagic.data(), badMagic.size()));
 
     auto badVersion = *packet;
-    badVersion[5]   = 2;
+    badVersion[5]   = 3;
     EXPECT_FALSE(decodeRealmInputMessage(badVersion.data(), badVersion.size()));
 
     auto badType = *packet;
@@ -103,6 +105,8 @@ TEST(RealmInputProtocol, rejectsMalformedAndOversizedPackets) {
 
 TEST(RealmInputProtocol, classifiesInputAndCaptureCommandsSeparately) {
     EXPECT_TRUE(realmInputMessageIsInputCommand(eRealmInputMessageType::KEYBOARD_TYPE));
+    EXPECT_TRUE(realmInputMessageIsInputCommand(eRealmInputMessageType::POINTER_CLICK));
+    EXPECT_TRUE(realmInputMessageIsInputCommand(eRealmInputMessageType::KEYBOARD_PRESS));
     EXPECT_FALSE(realmInputMessageIsInputCommand(eRealmInputMessageType::CAPTURE));
     EXPECT_TRUE(realmInputMessageIsCaptureCommand(eRealmInputMessageType::CAPTURE));
     EXPECT_TRUE(realmInputMessageIsCaptureCommand(eRealmInputMessageType::CAPTURE_REGION));

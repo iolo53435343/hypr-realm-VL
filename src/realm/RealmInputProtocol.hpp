@@ -28,6 +28,8 @@ namespace Realm {
         CAPTURE_REGION,
         CAPTURE_READY,
         CAPTURE_CANCEL,
+        POINTER_CLICK,
+        KEYBOARD_PRESS,
     };
 
     struct SRealmInputMessage {

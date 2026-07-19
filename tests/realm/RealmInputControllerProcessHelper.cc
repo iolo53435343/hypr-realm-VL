@@ -43,6 +43,8 @@ static const char* messageName(eRealmInputMessageType type) {
         case eRealmInputMessageType::CAPTURE_REGION: return "CAPTURE_REGION";
         case eRealmInputMessageType::CAPTURE_READY: return "CAPTURE_READY";
         case eRealmInputMessageType::CAPTURE_CANCEL: return "CAPTURE_CANCEL";
+        case eRealmInputMessageType::POINTER_CLICK: return "POINTER_CLICK";
+        case eRealmInputMessageType::KEYBOARD_PRESS: return "KEYBOARD_PRESS";
     }
     return "UNKNOWN";
 }

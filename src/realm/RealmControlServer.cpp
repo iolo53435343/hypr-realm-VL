@@ -120,9 +120,12 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
             .width  = REALM_INPUT_OUTPUT_WIDTH,
             .height = REALM_INPUT_OUTPUT_HEIGHT,
         };
-    } else if (method == "pointer.button") {
-        if (!params.button || !params.pressed || !onlyRealmAnd(params, {"button", "pressed"}))
-            return controlError(request.request_id, "invalid_params", "pointer.button requires only params.realm, params.button, and params.pressed");
+    } else if (method == "pointer.button" || method == "pointer.click") {
+        const bool atomic = method == "pointer.click";
+        if (!params.button || (atomic ? params.pressed.has_value() || !onlyRealmAnd(params, {"button"}) : !params.pressed || !onlyRealmAnd(params, {"button", "pressed"})))
+            return controlError(request.request_id, "invalid_params",
+                                atomic ? "pointer.click requires only params.realm and params.button" :
+                                         "pointer.button requires only params.realm, params.button, and params.pressed");
 
         uint32_t code = 0;
         if (*params.button == "left")
@@ -134,9 +137,9 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
         else
             return controlError(request.request_id, "invalid_params", "pointer button must be 'left', 'right', or 'middle'");
         message = SRealmInputMessage{
-            .type    = eRealmInputMessageType::POINTER_BUTTON,
+            .type    = atomic ? eRealmInputMessageType::POINTER_CLICK : eRealmInputMessageType::POINTER_BUTTON,
             .code    = code,
-            .pressed = *params.pressed,
+            .pressed = atomic ? false : *params.pressed,
         };
     } else if (method == "pointer.scroll") {
         if (!params.axis || !params.steps || !onlyRealmAnd(params, {"axis", "steps"}))
@@ -151,15 +154,18 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
             message.vertical = *params.steps;
         else
             return controlError(request.request_id, "invalid_params", "pointer scroll axis must be 'horizontal' or 'vertical'");
-    } else if (method == "keyboard.key") {
-        if (!params.keycode || !params.pressed || !onlyRealmAnd(params, {"keycode", "pressed"}))
-            return controlError(request.request_id, "invalid_params", "keyboard.key requires only params.realm, params.keycode, and params.pressed");
+    } else if (method == "keyboard.key" || method == "keyboard.press") {
+        const bool atomic = method == "keyboard.press";
+        if (!params.keycode || (atomic ? params.pressed.has_value() || !onlyRealmAnd(params, {"keycode"}) : !params.pressed || !onlyRealmAnd(params, {"keycode", "pressed"})))
+            return controlError(request.request_id, "invalid_params",
+                                atomic ? "keyboard.press requires only params.realm and params.keycode" :
+                                         "keyboard.key requires only params.realm, params.keycode, and params.pressed");
         if (*params.keycode > KEY_MAX)
             return controlError(request.request_id, "invalid_params", std::format("keyboard keycode must not exceed {}", KEY_MAX));
         message = SRealmInputMessage{
-            .type    = eRealmInputMessageType::KEYBOARD_KEY,
+            .type    = atomic ? eRealmInputMessageType::KEYBOARD_PRESS : eRealmInputMessageType::KEYBOARD_KEY,
             .code    = *params.keycode,
-            .pressed = *params.pressed,
+            .pressed = atomic ? false : *params.pressed,
         };
     } else if (method == "keyboard.type") {
         if (!params.text || !onlyRealmAnd(params, {"text"}))
@@ -231,9 +237,10 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
         return controlSuccess(*request.request_id, std::format(R"({{"realms":{}}})", realmListRequest(manager, FORMAT_JSON)));
     }
 
-    constexpr std::array<std::string_view, 18> REALM_METHODS = {
-        "realm.info",    "realm.create",    "realm.start",   "realm.pause",          "realm.resume", "realm.stop",     "realm.destroy",  "realm.takeover", "realm.release",
-        "realm.observe", "realm.unobserve", "realm.capture", "realm.capture_region", "pointer.move", "pointer.button", "pointer.scroll", "keyboard.key",   "keyboard.type",
+    constexpr std::array<std::string_view, 20> REALM_METHODS = {
+        "realm.info",     "realm.create",  "realm.start",    "realm.pause",     "realm.resume",   "realm.stop",           "realm.destroy",
+        "realm.takeover", "realm.release", "realm.observe",  "realm.unobserve", "realm.capture",  "realm.capture_region", "pointer.move",
+        "pointer.button", "pointer.click", "pointer.scroll", "keyboard.key",    "keyboard.press", "keyboard.type",
     };
     if (std::ranges::find(REALM_METHODS, method) == REALM_METHODS.end())
         return controlError(request.request_id, "method_not_found", std::format("unknown method '{}'", method));
@@ -241,7 +248,8 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
     if (!request.params || !request.params->realm || request.params->realm->empty())
         return controlError(request.request_id, "invalid_params", std::format("{} requires params.realm", method));
 
-    const bool inputMethod   = method == "pointer.move" || method == "pointer.button" || method == "pointer.scroll" || method == "keyboard.key" || method == "keyboard.type";
+    const bool inputMethod = method == "pointer.move" || method == "pointer.button" || method == "pointer.click" || method == "pointer.scroll" || method == "keyboard.key" ||
+        method == "keyboard.press" || method == "keyboard.type";
     const bool captureMethod = method == "realm.capture" || method == "realm.capture_region";
     if (!inputMethod && !captureMethod && hasAutomationParameters(*request.params))
         return controlError(request.request_id, "invalid_params", std::format("{} does not accept automation parameters", method));
