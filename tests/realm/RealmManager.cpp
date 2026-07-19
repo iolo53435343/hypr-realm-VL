@@ -239,6 +239,7 @@ TEST_F(CRealmManagerTest, observationPermissionIsIndependentAndRevokedOnStop) {
 
     ASSERT_TRUE(m_manager->startRealm(realm->id()));
     ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::OBSERVE));
     ASSERT_TRUE(m_manager->allowObservation(realm->id()));
     EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
 
@@ -254,6 +255,39 @@ TEST_F(CRealmManagerTest, observationPermissionIsIndependentAndRevokedOnStop) {
     EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
     ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::STOPPED));
     EXPECT_EQ(permissions, (std::vector<eRealmObservationPermission>{eRealmObservationPermission::ALLOWED, eRealmObservationPermission::DENIED}));
+}
+
+TEST_F(CRealmManagerTest, capabilitiesAreDenyByDefaultAndRevocationDropsRuntimePermission) {
+    std::vector<std::pair<eRealmCapability, bool>> changes;
+    auto capabilityListener = m_manager->m_events.capability.listen([&changes](const SRealmCapabilityEvent& event) { changes.emplace_back(event.capability, event.granted); });
+
+    auto created = m_manager->createRealm("capabilities");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+    EXPECT_FALSE(realm->capabilities().allows(eRealmCapability::OBSERVE));
+    EXPECT_FALSE(realm->capabilities().allows(eRealmCapability::POINTER));
+    EXPECT_FALSE(realm->capabilities().allows(eRealmCapability::KEYBOARD));
+    EXPECT_FALSE(m_manager->allowObservation(realm->id()));
+
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::OBSERVE));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::POINTER));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::KEYBOARD));
+    EXPECT_FALSE(m_manager->grantCapability(realm->id(), eRealmCapability::KEYBOARD));
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(m_manager->allowObservation(realm->id()));
+    ASSERT_TRUE(m_manager->revokeCapability(realm->id(), eRealmCapability::OBSERVE));
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
+    EXPECT_FALSE(m_manager->revokeCapability(realm->id(), eRealmCapability::OBSERVE));
+
+    EXPECT_EQ(changes,
+              (std::vector<std::pair<eRealmCapability, bool>>{
+                  {eRealmCapability::OBSERVE, true},
+                  {eRealmCapability::POINTER, true},
+                  {eRealmCapability::KEYBOARD, true},
+                  {eRealmCapability::OBSERVE, false},
+              }));
 }
 
 TEST_F(CRealmManagerTest, emergencyPauseStopsAutomationInEveryRunningRealm) {

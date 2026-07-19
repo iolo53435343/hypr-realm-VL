@@ -37,6 +37,36 @@ std::string_view Realm::realmObservationPermissionName(eRealmObservationPermissi
     return "unknown";
 }
 
+std::string_view Realm::realmCapabilityName(eRealmCapability capability) {
+    switch (capability) {
+        case eRealmCapability::OBSERVE: return "observe";
+        case eRealmCapability::POINTER: return "pointer";
+        case eRealmCapability::KEYBOARD: return "keyboard";
+    }
+
+    return "unknown";
+}
+
+std::expected<eRealmCapability, std::string> Realm::realmCapabilityFromName(std::string_view name) {
+    if (name == "observe")
+        return eRealmCapability::OBSERVE;
+    if (name == "pointer")
+        return eRealmCapability::POINTER;
+    if (name == "keyboard")
+        return eRealmCapability::KEYBOARD;
+    return std::unexpected(std::format("unknown or unenforced realm capability '{}'", name));
+}
+
+bool SRealmCapabilityManifest::allows(eRealmCapability capability) const {
+    switch (capability) {
+        case eRealmCapability::OBSERVE: return observe;
+        case eRealmCapability::POINTER: return pointer;
+        case eRealmCapability::KEYBOARD: return keyboard;
+    }
+
+    return false;
+}
+
 CRealm::CRealm(uint64_t id, std::string name) : m_id(id), m_name(std::move(name)) {
     ;
 }
@@ -83,6 +113,10 @@ eRealmInputOwner CRealm::inputOwner() const {
 
 eRealmObservationPermission CRealm::observationPermission() const {
     return m_observationPermission;
+}
+
+const SRealmCapabilityManifest& CRealm::capabilities() const {
+    return m_capabilities;
 }
 
 std::expected<void, std::string> CRealm::transitionTo(eRealmState state) {

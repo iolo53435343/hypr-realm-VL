@@ -29,6 +29,7 @@ namespace Realm {
         struct SImpl;
 
         void           updateWindowInputOwner(const SP<CRealm>& realm);
+        void           updateWindowDecoration(const SP<CRealm>& realm);
 
         CRealmManager& m_manager;
         UP<SImpl>      m_impl;

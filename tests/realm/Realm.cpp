@@ -12,6 +12,14 @@ TEST(Realm, initializesStoppedWithSafeDefaults) {
     EXPECT_EQ(realm.state(), eRealmState::STOPPED);
     EXPECT_EQ(realm.inputOwner(), eRealmInputOwner::NONE);
     EXPECT_EQ(realm.observationPermission(), eRealmObservationPermission::DENIED);
+    EXPECT_FALSE(realm.capabilities().observe);
+    EXPECT_FALSE(realm.capabilities().pointer);
+    EXPECT_FALSE(realm.capabilities().keyboard);
+    EXPECT_FALSE(realm.capabilities().clipboard);
+    EXPECT_TRUE(realm.capabilities().network.empty());
+    EXPECT_TRUE(realm.capabilities().filesystemRead.empty());
+    EXPECT_TRUE(realm.capabilities().filesystemWrite.empty());
+    EXPECT_TRUE(realm.capabilities().secrets.empty());
     EXPECT_EQ(realm.compositorPID(), 0);
     EXPECT_EQ(realm.exitCode(), -1);
     EXPECT_TRUE(realm.runtimeDirectory().empty());
@@ -23,6 +31,16 @@ TEST(Realm, initializesStoppedWithSafeDefaults) {
 TEST(Realm, observationPermissionNamesAreStable) {
     EXPECT_EQ(realmObservationPermissionName(eRealmObservationPermission::DENIED), "denied");
     EXPECT_EQ(realmObservationPermissionName(eRealmObservationPermission::ALLOWED), "allowed");
+}
+
+TEST(Realm, capabilityNamesAndParsingAreStable) {
+    EXPECT_EQ(realmCapabilityName(eRealmCapability::OBSERVE), "observe");
+    EXPECT_EQ(realmCapabilityName(eRealmCapability::POINTER), "pointer");
+    EXPECT_EQ(realmCapabilityName(eRealmCapability::KEYBOARD), "keyboard");
+    EXPECT_EQ(realmCapabilityFromName("observe"), eRealmCapability::OBSERVE);
+    EXPECT_EQ(realmCapabilityFromName("pointer"), eRealmCapability::POINTER);
+    EXPECT_EQ(realmCapabilityFromName("keyboard"), eRealmCapability::KEYBOARD);
+    EXPECT_FALSE(realmCapabilityFromName("network"));
 }
 
 TEST(Realm, inputOwnerNamesAreStable) {

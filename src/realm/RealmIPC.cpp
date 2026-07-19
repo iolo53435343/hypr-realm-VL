@@ -12,21 +12,39 @@
 using namespace Hyprutils::String;
 using namespace Realm;
 
+static std::string realmStringArrayJSON(const std::vector<std::string>& values) {
+    std::string response = "[";
+    for (const auto& value : values) {
+        if (response.size() > 1)
+            response += ',';
+        response += std::format(R"("{}")", escapeJSONStrings(value));
+    }
+    response += ']';
+    return response;
+}
+
+static std::string realmCapabilitiesJSON(const SRealmCapabilityManifest& capabilities) {
+    return std::format(R"({{"observe":{},"pointer":{},"keyboard":{},"clipboard":{},"network":{},"filesystem_read":{},"filesystem_write":{},"secrets":{}}})", capabilities.observe,
+                       capabilities.pointer, capabilities.keyboard, capabilities.clipboard, realmStringArrayJSON(capabilities.network),
+                       realmStringArrayJSON(capabilities.filesystemRead), realmStringArrayJSON(capabilities.filesystemWrite), realmStringArrayJSON(capabilities.secrets));
+}
+
 std::string Realm::realmJSON(const CRealm& realm) {
     return std::format(
-        R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","observation_permission":"{}","pid":{},"wayland_socket":"{}","runtime_directory":"{}","config_path":"{}","log_path":"{}","exit_code":{}}})",
+        R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","observation_permission":"{}","capabilities":{},"pid":{},"wayland_socket":"{}","runtime_directory":"{}","config_path":"{}","log_path":"{}","exit_code":{}}})",
         realm.id(), escapeJSONStrings(realm.name()), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()),
-        realmObservationPermissionName(realm.observationPermission()), realm.compositorPID(), escapeJSONStrings(realm.waylandSocket()), escapeJSONStrings(realm.runtimeDirectory()),
-        escapeJSONStrings(realm.configPath()), escapeJSONStrings(realm.logPath()), realm.exitCode());
+        realmObservationPermissionName(realm.observationPermission()), realmCapabilitiesJSON(realm.capabilities()), realm.compositorPID(), escapeJSONStrings(realm.waylandSocket()),
+        escapeJSONStrings(realm.runtimeDirectory()), escapeJSONStrings(realm.configPath()), escapeJSONStrings(realm.logPath()), realm.exitCode());
 }
 
 static std::string realmText(const CRealm& realm) {
-    return std::format("Realm {} ({}):\n\tstate: {}\n\tinput owner: {}\n\tobservation permission: {}\n\tpid: {}\n\twayland socket: {}\n\truntime directory: {}\n\tconfig path: "
-                       "{}\n\tlog path: {}\n\texit code: {}\n",
+    return std::format("Realm {} ({}):\n\tstate: {}\n\tinput owner: {}\n\tobservation permission: {}\n\tcapabilities: observe={}, pointer={}, keyboard={}\n\tpid: {}\n\twayland "
+                       "socket: {}\n\truntime directory: {}\n\tconfig path: {}\n\tlog path: {}\n\texit code: {}\n",
                        realm.name(), realm.id(), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()),
-                       realmObservationPermissionName(realm.observationPermission()), realm.compositorPID(), realm.waylandSocket().empty() ? "-" : realm.waylandSocket(),
-                       realm.runtimeDirectory().empty() ? "-" : realm.runtimeDirectory(), realm.configPath().empty() ? "-" : realm.configPath(),
-                       realm.logPath().empty() ? "-" : realm.logPath(), realm.exitCode());
+                       realmObservationPermissionName(realm.observationPermission()), realm.capabilities().observe ? "granted" : "denied",
+                       realm.capabilities().pointer ? "granted" : "denied", realm.capabilities().keyboard ? "granted" : "denied", realm.compositorPID(),
+                       realm.waylandSocket().empty() ? "-" : realm.waylandSocket(), realm.runtimeDirectory().empty() ? "-" : realm.runtimeDirectory(),
+                       realm.configPath().empty() ? "-" : realm.configPath(), realm.logPath().empty() ? "-" : realm.logPath(), realm.exitCode());
 }
 
 static std::string errorResponse(eHyprCtlOutputFormat format, const std::string& error) {
@@ -41,9 +59,15 @@ static std::string successResponse(eHyprCtlOutputFormat format, std::string_view
     return std::format("{} realm '{}' ({})", action, realm->name(), realm->id());
 }
 
-static std::expected<std::pair<std::string, std::string>, std::string> parseRealmCommand(const std::string& request) {
+struct SParsedRealmCommand {
+    std::string                action;
+    std::string                name;
+    std::optional<std::string> capability;
+};
+
+static std::expected<SParsedRealmCommand, std::string> parseRealmCommand(const std::string& request) {
     if (request == "realm")
-        return std::unexpected("usage: hyprctl realm <create|start|pause|resume|stop|kill|takeover|release|observe|unobserve|destroy|info> <name>");
+        return std::unexpected("usage: hyprctl realm <create|start|pause|resume|stop|kill|takeover|release|observe|unobserve|grant|revoke|destroy|info> <name> [capability]");
     if (!request.starts_with("realm "))
         return std::unexpected("invalid realm request");
 
@@ -57,7 +81,18 @@ static std::expected<std::pair<std::string, std::string>, std::string> parseReal
     if (name.empty())
         return std::unexpected(std::format("realm action '{}' requires a name", action));
 
-    return std::pair<std::string, std::string>{std::move(action), std::move(name)};
+    std::optional<std::string> capability;
+    if (action == "grant" || action == "revoke") {
+        const auto capabilitySeparator = name.rfind(' ');
+        if (capabilitySeparator == std::string::npos)
+            return std::unexpected(std::format("realm action '{}' requires a name and capability", action));
+        capability = trim(name.substr(capabilitySeparator + 1));
+        name       = trim(name.substr(0, capabilitySeparator));
+        if (name.empty() || capability->empty())
+            return std::unexpected(std::format("realm action '{}' requires a name and capability", action));
+    }
+
+    return SParsedRealmCommand{.action = std::move(action), .name = std::move(name), .capability = std::move(capability)};
 }
 
 std::string Realm::realmListRequest(CRealmManager& manager, eHyprCtlOutputFormat format) {
@@ -90,7 +125,8 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
     if (!parsed)
         return errorResponse(format, parsed.error());
 
-    const auto& [action, name] = *parsed;
+    const auto& action = parsed->action;
+    const auto& name   = parsed->name;
     if (action == "create") {
         auto created = manager.createRealm(name);
         if (!created)
@@ -99,8 +135,16 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
     }
 
     if (action != "start" && action != "pause" && action != "resume" && action != "stop" && action != "kill" && action != "takeover" && action != "release" &&
-        action != "observe" && action != "unobserve" && action != "destroy" && action != "info")
+        action != "observe" && action != "unobserve" && action != "grant" && action != "revoke" && action != "destroy" && action != "info")
         return errorResponse(format, std::format("unknown realm action '{}'", action));
+
+    std::optional<eRealmCapability> capability;
+    if (parsed->capability) {
+        auto parsedCapability = realmCapabilityFromName(*parsed->capability);
+        if (!parsedCapability)
+            return errorResponse(format, parsedCapability.error());
+        capability = *parsedCapability;
+    }
 
     auto realm = manager.realmByName(name);
     if (!realm)
@@ -110,7 +154,7 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
         return format == FORMAT_JSON ? realmJSON(*realm) : realmText(*realm);
 
     std::expected<void, std::string> result;
-    std::string_view                 responseAction = "";
+    std::string                      responseAction;
     if (action == "start") {
         result         = manager.startRealm(realm->id());
         responseAction = "starting";
@@ -138,6 +182,12 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
     } else if (action == "unobserve") {
         result         = manager.denyObservation(realm->id());
         responseAction = "observation denied for";
+    } else if (action == "grant") {
+        result         = manager.grantCapability(realm->id(), *capability);
+        responseAction = std::format("granted {} capability to", realmCapabilityName(*capability));
+    } else if (action == "revoke") {
+        result         = manager.revokeCapability(realm->id(), *capability);
+        responseAction = std::format("revoked {} capability from", realmCapabilityName(*capability));
     } else if (action == "destroy") {
         result         = manager.destroyRealm(realm->id());
         responseAction = "destroyed";
@@ -151,8 +201,9 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
 std::string Realm::realmLifecycleEventData(const SRealmLifecycleEvent& event) {
     if (!event.realm)
         return "{}";
-    return std::format(R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","observation_permission":"{}"}})", event.realm->id(), escapeJSONStrings(event.realm->name()),
-                       realmStateName(event.realm->state()), realmInputOwnerName(event.realm->inputOwner()), realmObservationPermissionName(event.realm->observationPermission()));
+    return std::format(R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","observation_permission":"{}","capabilities":{}}})", event.realm->id(),
+                       escapeJSONStrings(event.realm->name()), realmStateName(event.realm->state()), realmInputOwnerName(event.realm->inputOwner()),
+                       realmObservationPermissionName(event.realm->observationPermission()), realmCapabilitiesJSON(event.realm->capabilities()));
 }
 
 UP<CRealmIPC>& Realm::ipc() {
@@ -188,9 +239,19 @@ CRealmIPC::CRealmIPC(CRealmManager& manager, CRealmWindowManager& windowManager)
                                  realmObservationPermissionName(event.permission)),
         });
     });
+    m_capabilityListener  = m_manager.m_events.capability.listen([](const SRealmCapabilityEvent& event) {
+        if (!g_pEventManager || !event.realm)
+            return;
+        g_pEventManager->postEvent(SHyprIPCEvent{
+             .event = event.granted ? "realmcapabilitygranted" : "realmcapabilityrevoked",
+             .data  = std::format(R"({{"id":{},"name":"{}","capability":"{}","granted":{}}})", event.realm->id(), escapeJSONStrings(event.realm->name()),
+                                  realmCapabilityName(event.capability), event.granted),
+        });
+    });
 }
 
 CRealmIPC::~CRealmIPC() {
+    m_capabilityListener.reset();
     m_observationListener.reset();
     m_lifecycleListener.reset();
     if (!g_pHyprCtl)

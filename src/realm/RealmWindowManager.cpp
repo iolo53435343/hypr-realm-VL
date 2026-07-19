@@ -22,6 +22,7 @@ struct CRealmWindowManager::SImpl {
     CHyprSignalListener                        windowCloseRequestListener;
     CHyprSignalListener                        lifecycleListener;
     CHyprSignalListener                        inputOwnerListener;
+    CHyprSignalListener                        capabilityListener;
 };
 
 CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowManagerOptions options) : m_manager(manager), m_impl(makeUnique<SImpl>()) {
@@ -98,6 +99,7 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
     });
 
     m_impl->inputOwnerListener = m_manager.m_events.inputOwner.listen([this](const SRealmInputOwnerEvent& event) { updateWindowInputOwner(event.realm); });
+    m_impl->capabilityListener = m_manager.m_events.capability.listen([this](const SRealmCapabilityEvent& event) { updateWindowDecoration(event.realm); });
 }
 
 CRealmWindowManager::~CRealmWindowManager() = default;
@@ -176,6 +178,20 @@ void CRealmWindowManager::updateWindowInputOwner(const SP<CRealm>& realm) {
     window->updateWindowDecos();
 }
 
+void CRealmWindowManager::updateWindowDecoration(const SP<CRealm>& realm) {
+    if (!realm)
+        return;
+
+    const auto windowID = windowForRealm(realm->id());
+    if (!windowID)
+        return;
+
+    const auto windowIterator = m_impl->windows.find(*windowID);
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        window->updateWindowDecos();
+}
+
 std::expected<void, std::string> CRealmWindowManager::takeoverRealm(uint64_t realmID) {
     const auto realm = m_manager.realmByID(realmID);
     if (!realm)
@@ -217,18 +233,37 @@ std::expected<void, std::string> CRealmWindowManager::releaseRealm(uint64_t real
 std::string Realm::realmWindowJSON(const SP<CRealm>& realm) {
     if (!realm)
         return "null";
-    return std::format(R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}"}})", realm->id(), escapeJSONStrings(realm->name()), realmStateName(realm->state()),
-                       realmInputOwnerName(realm->inputOwner()));
+    return std::format(R"({{"id":{},"name":"{}","state":"{}","input_owner":"{}","capabilities":{{"observe":{},"pointer":{},"keyboard":{}}}}})", realm->id(),
+                       escapeJSONStrings(realm->name()), realmStateName(realm->state()), realmInputOwnerName(realm->inputOwner()), realm->capabilities().observe,
+                       realm->capabilities().pointer, realm->capabilities().keyboard);
+}
+
+static std::string realmGrantedCapabilityNames(const CRealm& realm) {
+    std::string capabilities;
+    const auto  append = [&capabilities](std::string_view capability) {
+        if (!capabilities.empty())
+            capabilities += ',';
+        capabilities += capability;
+    };
+    if (realm.capabilities().observe)
+        append("observe");
+    if (realm.capabilities().pointer)
+        append("pointer");
+    if (realm.capabilities().keyboard)
+        append("keyboard");
+    return capabilities.empty() ? "none" : capabilities;
 }
 
 std::string Realm::realmWindowText(const SP<CRealm>& realm) {
     if (!realm)
         return "none";
-    return std::format("{} ({}, {}, input: {})", realm->name(), realm->id(), realmStateName(realm->state()), realmInputOwnerName(realm->inputOwner()));
+    return std::format("{} ({}, {}, input: {}, capabilities: {})", realm->name(), realm->id(), realmStateName(realm->state()), realmInputOwnerName(realm->inputOwner()),
+                       realmGrantedCapabilityNames(*realm));
 }
 
 std::string Realm::realmWindowDecorationLabel(const CRealm& realm) {
-    return std::format("Realm: {} · {} · input: {}", realm.name(), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()));
+    return std::format("Realm: {} · {} · input: {} · capabilities: {}", realm.name(), realmStateName(realm.state()), realmInputOwnerName(realm.inputOwner()),
+                       realmGrantedCapabilityNames(realm));
 }
 
 UP<CRealmWindowManager>& Realm::windowManager() {

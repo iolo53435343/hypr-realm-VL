@@ -260,6 +260,8 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
 
     if (method == "realm.info")
         return controlSuccess(*request.request_id, std::format(R"({{"realm":{}}})", realmJSON(*realm)));
+    if (method == "realm.observe" && !realm->capabilities().allows(eRealmCapability::OBSERVE))
+        return controlError(request.request_id, "capability_denied", std::format("realm '{}' does not have the observe capability", realm->name()));
     if (inputMethod)
         return handleInputRequest(request, realm, inputController);
     if (captureMethod)

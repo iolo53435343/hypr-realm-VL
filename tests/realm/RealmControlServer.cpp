@@ -280,6 +280,10 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
 
     auto response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
                                         R"({"request_id":"1","method":"keyboard.type","params":{"realm":"input","text":"echo realm\n"}})");
+    EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::KEYBOARD));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                   R"({"request_id":"1-granted","method":"keyboard.type","params":{"realm":"input","text":"echo realm\n"}})");
     EXPECT_TRUE(response.contains(R"("ok":true)"));
     EXPECT_TRUE(response.contains(R"("action":"queued")"));
     ASSERT_TRUE(waitForControllerLog(*realm, "KEYBOARD_TYPE"));
@@ -294,12 +298,37 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
 
     ASSERT_TRUE(m_windowManager->releaseRealm(realm->id()));
     response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"4","method":"pointer.move","params":{"realm":"input","x":10,"y":20}})");
+    EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::POINTER));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                   R"({"request_id":"4-granted","method":"pointer.move","params":{"realm":"input","x":10,"y":20}})");
     EXPECT_TRUE(response.contains(R"("ok":true)"));
     ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_MOVE"));
 
     ASSERT_TRUE(m_manager->stopRealm(realm->id()));
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::STOPPED));
     EXPECT_FALSE(m_inputController->controllerReady(realm->id()));
+}
+
+TEST_F(CRealmControlServerTest, revokingInputCapabilityReleasesHeldVirtualInputImmediately) {
+    ASSERT_TRUE(m_manager->createRealm("input-revoke"));
+    const auto realm = m_manager->realmByName("input-revoke");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::POINTER));
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+    ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+
+    auto response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                        R"({"request_id":"press","method":"pointer.button","params":{"realm":"input-revoke","button":"left","pressed":true}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_BUTTON"));
+
+    ASSERT_TRUE(m_manager->revokeCapability(realm->id(), eRealmCapability::POINTER));
+    ASSERT_TRUE(waitForControllerLog(*realm, "RELEASE_ALL"));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                   R"({"request_id":"after-revoke","method":"pointer.move","params":{"realm":"input-revoke","x":10,"y":20}})");
+    EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
 }
 
 TEST_F(CRealmControlServerTest, capturesRealmFramesThroughSharedMemoryWithIndependentPermission) {
@@ -310,7 +339,18 @@ TEST_F(CRealmControlServerTest, capturesRealmFramesThroughSharedMemoryWithIndepe
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
     ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
 
-    auto response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"denied","method":"realm.capture","params":{"realm":"capture"}})");
+    auto response =
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"capability-denied","method":"realm.capture","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
+    response =
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"self-grant-denied","method":"realm.observe","params":{"realm":"capture"}})");
+    EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
+    EXPECT_TRUE(
+        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"no-private-grant","method":"realm.grant","params":{"realm":"capture"}})")
+            .contains(R"("code":"method_not_found")"));
+
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::OBSERVE));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"denied","method":"realm.capture","params":{"realm":"capture"}})");
     EXPECT_TRUE(response.contains(R"("code":"observation_denied")"));
 
     response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"allow","method":"realm.observe","params":{"realm":"capture"}})");
@@ -362,6 +402,7 @@ TEST_F(CRealmControlServerTest, revokingObservationCancelsPendingCaptureAndIgnor
     ASSERT_TRUE(m_manager->startRealm(realm->id()));
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
     ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::OBSERVE));
     ASSERT_TRUE(m_manager->allowObservation(realm->id()));
 
     auto client = connectClient();
@@ -370,7 +411,7 @@ TEST_F(CRealmControlServerTest, revokingObservationCancelsPendingCaptureAndIgnor
     ASSERT_EQ(send(client.get(), request.data(), request.size(), MSG_NOSIGNAL), sc<ssize_t>(request.size()));
     m_server->dispatchPendingEvents();
 
-    ASSERT_TRUE(m_manager->denyObservation(realm->id()));
+    ASSERT_TRUE(m_manager->revokeCapability(realm->id(), eRealmCapability::OBSERVE));
     auto received = receiveResponsesWithDescriptor(client, 2);
     ASSERT_EQ(received.responses.size(), 2);
     EXPECT_TRUE(received.responses[0].contains(R"("action":"queued")"));
@@ -378,6 +419,8 @@ TEST_F(CRealmControlServerTest, revokingObservationCancelsPendingCaptureAndIgnor
     EXPECT_TRUE(received.responses[1].contains("permission was revoked"));
     EXPECT_FALSE(received.descriptor.isValid());
     EXPECT_TRUE(m_inputController->controllerReady(realm->id()));
+    EXPECT_FALSE(realm->capabilities().observe);
+    EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::DENIED);
 }
 
 TEST_F(CRealmControlServerTest, validatesInputShapesAndBoundsBeforeRouting) {
@@ -409,6 +452,7 @@ TEST_F(CRealmControlServerTest, rateLimitsInputWithoutConsumingTheBurstOnRejecti
     ASSERT_TRUE(m_manager->startRealm(realm->id()));
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
     ASSERT_TRUE(waitForInputController(*m_manager, *m_inputController, realm));
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::KEYBOARD));
 
     const auto oversizedBurst = std::string(513, 'x');
     const auto rejected       = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),

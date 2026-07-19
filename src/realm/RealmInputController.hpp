@@ -26,6 +26,7 @@ namespace Realm {
         TRANSPORT_ERROR,
         OBSERVATION_DENIED,
         CAPTURE_BUSY,
+        CAPABILITY_DENIED,
     };
 
     std::string_view realmInputErrorName(eRealmInputError error);

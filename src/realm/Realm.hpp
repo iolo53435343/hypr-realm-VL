@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <sys/types.h>
+#include <vector>
 
 namespace Realm {
     enum class eRealmState : uint8_t {
@@ -33,6 +34,28 @@ namespace Realm {
 
     std::string_view realmObservationPermissionName(eRealmObservationPermission permission);
 
+    enum class eRealmCapability : uint8_t {
+        OBSERVE = 0,
+        POINTER,
+        KEYBOARD,
+    };
+
+    std::string_view                             realmCapabilityName(eRealmCapability capability);
+    std::expected<eRealmCapability, std::string> realmCapabilityFromName(std::string_view name);
+
+    struct SRealmCapabilityManifest {
+        bool                     observe   = false;
+        bool                     pointer   = false;
+        bool                     keyboard  = false;
+        bool                     clipboard = false;
+        std::vector<std::string> network;
+        std::vector<std::string> filesystemRead;
+        std::vector<std::string> filesystemWrite;
+        std::vector<std::string> secrets;
+
+        bool                     allows(eRealmCapability capability) const;
+    };
+
     class CRealm {
       public:
         CRealm(uint64_t id, std::string name);
@@ -48,6 +71,7 @@ namespace Realm {
         int                              exitCode() const;
         eRealmInputOwner                 inputOwner() const;
         eRealmObservationPermission      observationPermission() const;
+        const SRealmCapabilityManifest&  capabilities() const;
 
         std::expected<void, std::string> transitionTo(eRealmState state);
 
@@ -63,6 +87,7 @@ namespace Realm {
         int                         m_exitCode              = -1;
         eRealmInputOwner            m_inputOwner            = eRealmInputOwner::NONE;
         eRealmObservationPermission m_observationPermission = eRealmObservationPermission::DENIED;
+        SRealmCapabilityManifest    m_capabilities;
 
         friend class CRealmManager;
     };

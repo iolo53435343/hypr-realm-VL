@@ -49,6 +49,7 @@ std::string_view Realm::realmInputErrorName(eRealmInputError error) {
         case eRealmInputError::TRANSPORT_ERROR: return "transport_error";
         case eRealmInputError::OBSERVATION_DENIED: return "observation_denied";
         case eRealmInputError::CAPTURE_BUSY: return "capture_busy";
+        case eRealmInputError::CAPABILITY_DENIED: return "capability_denied";
     }
 
     return "input_error";
@@ -83,6 +84,17 @@ static bool pathIsWithin(const std::filesystem::path& path, const std::filesyste
     }
 
     return true;
+}
+
+static std::optional<eRealmCapability> capabilityForInputMessage(eRealmInputMessageType type) {
+    switch (type) {
+        case eRealmInputMessageType::POINTER_MOVE:
+        case eRealmInputMessageType::POINTER_BUTTON:
+        case eRealmInputMessageType::POINTER_SCROLL: return eRealmCapability::POINTER;
+        case eRealmInputMessageType::KEYBOARD_KEY:
+        case eRealmInputMessageType::KEYBOARD_TYPE: return eRealmCapability::KEYBOARD;
+        default: return std::nullopt;
+    }
 }
 
 static std::expected<std::filesystem::path, std::string> realmWaylandSocketPath(const CRealm& realm) {
@@ -249,11 +261,20 @@ struct CRealmInputControllerManager::SImpl {
             if (event.realm && event.permission == eRealmObservationPermission::DENIED)
                 cancelCapture(event.realm->id(), "realm observation permission was revoked");
         });
+        capabilityListener  = manager.m_events.capability.listen([this](const SRealmCapabilityEvent& event) {
+            if (!event.realm || event.granted)
+                return;
+            if (event.capability == eRealmCapability::OBSERVE)
+                cancelCapture(event.realm->id(), "realm observe capability was revoked");
+            else
+                releaseAll(event.realm->id());
+        });
         setupMaintenanceTimer();
     }
 
     ~SImpl() {
         shuttingDown = true;
+        capabilityListener.reset();
         observationListener.reset();
         ownerListener.reset();
         lifecycleListener.reset();
@@ -487,6 +508,11 @@ struct CRealmInputControllerManager::SImpl {
         if (realm->state() != eRealmState::RUNNING || realm->inputOwner() != eRealmInputOwner::AGENT)
             return std::unexpected(
                 SRealmInputError{.code = eRealmInputError::INPUT_DENIED, .message = std::format("realm '{}' does not currently permit agent input", realm->name())});
+        const auto capability = capabilityForInputMessage(message.type);
+        if (!capability || !realm->capabilities().allows(*capability))
+            return std::unexpected(SRealmInputError{
+                .code    = eRealmInputError::CAPABILITY_DENIED,
+                .message = std::format("realm '{}' does not have the {} capability", realm->name(), capability ? realmCapabilityName(*capability) : "required input")});
 
         const auto controller = controllers.find(realmID);
         if (controller == controllers.end()) {
@@ -521,6 +547,9 @@ struct CRealmInputControllerManager::SImpl {
         if (realm->state() != eRealmState::RUNNING)
             return std::unexpected(SRealmInputError{.code    = eRealmInputError::OBSERVATION_DENIED,
                                                     .message = std::format("realm '{}' cannot be observed while {}", realm->name(), realmStateName(realm->state()))});
+        if (!realm->capabilities().allows(eRealmCapability::OBSERVE))
+            return std::unexpected(
+                SRealmInputError{.code = eRealmInputError::CAPABILITY_DENIED, .message = std::format("realm '{}' does not have the observe capability", realm->name())});
         if (realm->observationPermission() != eRealmObservationPermission::ALLOWED)
             return std::unexpected(
                 SRealmInputError{.code = eRealmInputError::OBSERVATION_DENIED, .message = std::format("realm '{}' observation permission is denied", realm->name())});
@@ -805,6 +834,7 @@ struct CRealmInputControllerManager::SImpl {
     CHyprSignalListener                      lifecycleListener;
     CHyprSignalListener                      ownerListener;
     CHyprSignalListener                      observationListener;
+    CHyprSignalListener                      capabilityListener;
     SP<CEventLoopTimer>                      maintenanceTimer;
     std::function<void(SRealmCaptureResult)> captureResultCallback;
     uint64_t                                 nextCaptureID = 1;

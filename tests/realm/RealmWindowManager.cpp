@@ -122,6 +122,9 @@ TEST_F(CRealmWindowManagerTest, takeoverRequiresHostWindowAndReleaseRestoresAgen
     ASSERT_TRUE(m_windowManager->releaseRealm(realm->id()));
     EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
     EXPECT_FALSE(m_windowManager->releaseRealm(realm->id()));
+
+    ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::POINTER));
+    EXPECT_TRUE(realmWindowDecorationLabel(*realm).contains("capabilities: pointer"));
 }
 
 TEST(RealmWindowFormatting, includesEscapedInspectionMetadataAndReadableLabel) {
@@ -129,7 +132,8 @@ TEST(RealmWindowFormatting, includesEscapedInspectionMetadataAndReadableLabel) {
 
     EXPECT_EQ(realmWindowJSON({}), "null");
     EXPECT_EQ(realmWindowText({}), "none");
-    EXPECT_EQ(realmWindowJSON(realm), R"({"id":7,"name":"codex \"work\"","state":"stopped","input_owner":"none"})");
-    EXPECT_EQ(realmWindowText(realm), R"(codex "work" (7, stopped, input: none))");
-    EXPECT_EQ(realmWindowDecorationLabel(*realm), R"(Realm: codex "work" · stopped · input: none)");
+    EXPECT_EQ(realmWindowJSON(realm),
+              R"({"id":7,"name":"codex \"work\"","state":"stopped","input_owner":"none","capabilities":{"observe":false,"pointer":false,"keyboard":false}})");
+    EXPECT_EQ(realmWindowText(realm), R"(codex "work" (7, stopped, input: none, capabilities: none))");
+    EXPECT_EQ(realmWindowDecorationLabel(*realm), R"(Realm: codex "work" · stopped · input: none · capabilities: none)");
 }

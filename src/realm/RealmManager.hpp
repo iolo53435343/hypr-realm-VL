@@ -49,6 +49,12 @@ namespace Realm {
         eRealmObservationPermission permission = eRealmObservationPermission::DENIED;
     };
 
+    struct SRealmCapabilityEvent {
+        SP<CRealm>       realm;
+        eRealmCapability capability = eRealmCapability::OBSERVE;
+        bool             granted    = false;
+    };
+
     struct SRealmManagerOptions {
         std::filesystem::path     runtimeRoot;
         std::filesystem::path     compositorBinary;
@@ -75,6 +81,8 @@ namespace Realm {
         std::expected<void, std::string>       releaseRealm(uint64_t id);
         std::expected<void, std::string>       allowObservation(uint64_t id);
         std::expected<void, std::string>       denyObservation(uint64_t id);
+        std::expected<void, std::string>       grantCapability(uint64_t id, eRealmCapability capability);
+        std::expected<void, std::string>       revokeCapability(uint64_t id, eRealmCapability capability);
         std::expected<void, std::string>       destroyRealm(uint64_t id);
 
         SP<CRealm>                             realmByID(uint64_t id) const;
@@ -89,6 +97,7 @@ namespace Realm {
             CSignalT<SRealmLifecycleEvent>             lifecycle;
             CSignalT<SRealmInputOwnerEvent>            inputOwner;
             CSignalT<SRealmObservationPermissionEvent> observationPermission;
+            CSignalT<SRealmCapabilityEvent>            capability;
         } m_events;
 
       private:
@@ -125,6 +134,7 @@ namespace Realm {
         void                                      emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRealm>& realm);
         void                                      setInputOwner(const SP<CRealm>& realm, eRealmInputOwner owner);
         void                                      setObservationPermission(const SP<CRealm>& realm, eRealmObservationPermission permission);
+        void                                      setCapability(const SP<CRealm>& realm, eRealmCapability capability, bool granted);
 
         SRealmManagerOptions                      m_options;
         std::vector<SP<CRealm>>                   m_realms;

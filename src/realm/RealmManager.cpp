@@ -513,6 +513,18 @@ void CRealmManager::setObservationPermission(const SP<CRealm>& realm, eRealmObse
     m_events.observationPermission.emit(SRealmObservationPermissionEvent{.realm = realm, .previous = previous, .permission = permission});
 }
 
+void CRealmManager::setCapability(const SP<CRealm>& realm, eRealmCapability capability, bool granted) {
+    if (!realm || realm->m_capabilities.allows(capability) == granted)
+        return;
+
+    switch (capability) {
+        case eRealmCapability::OBSERVE: realm->m_capabilities.observe = granted; break;
+        case eRealmCapability::POINTER: realm->m_capabilities.pointer = granted; break;
+        case eRealmCapability::KEYBOARD: realm->m_capabilities.keyboard = granted; break;
+    }
+    m_events.capability.emit(SRealmCapabilityEvent{.realm = realm, .capability = capability, .granted = granted});
+}
+
 std::expected<void, std::string> CRealmManager::validateName(const std::string& name) const {
     if (name.empty())
         return std::unexpected("realm name cannot be empty");
@@ -871,6 +883,8 @@ std::expected<void, std::string> CRealmManager::allowObservation(uint64_t id) {
     auto realm = realmByID(id);
     if (!realm)
         return std::unexpected(std::format("realm {} does not exist", id));
+    if (!realm->capabilities().allows(eRealmCapability::OBSERVE))
+        return std::unexpected(std::format("realm '{}' does not have the observe capability", realm->name()));
     if (realm->state() != eRealmState::RUNNING)
         return std::unexpected(std::format("realm '{}' observation cannot be allowed while {}", realm->name(), realmStateName(realm->state())));
     if (realm->observationPermission() == eRealmObservationPermission::ALLOWED)
@@ -888,6 +902,30 @@ std::expected<void, std::string> CRealmManager::denyObservation(uint64_t id) {
         return std::unexpected(std::format("realm '{}' observation is already denied", realm->name()));
 
     setObservationPermission(realm, eRealmObservationPermission::DENIED);
+    return {};
+}
+
+std::expected<void, std::string> CRealmManager::grantCapability(uint64_t id, eRealmCapability capability) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->capabilities().allows(capability))
+        return std::unexpected(std::format("realm '{}' already has the {} capability", realm->name(), realmCapabilityName(capability)));
+
+    setCapability(realm, capability, true);
+    return {};
+}
+
+std::expected<void, std::string> CRealmManager::revokeCapability(uint64_t id, eRealmCapability capability) {
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (!realm->capabilities().allows(capability))
+        return std::unexpected(std::format("realm '{}' does not have the {} capability", realm->name(), realmCapabilityName(capability)));
+
+    if (capability == eRealmCapability::OBSERVE)
+        setObservationPermission(realm, eRealmObservationPermission::DENIED);
+    setCapability(realm, capability, false);
     return {};
 }
 

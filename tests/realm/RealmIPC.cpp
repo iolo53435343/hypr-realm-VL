@@ -83,10 +83,13 @@ TEST_F(CRealmIPCTest, createsListsAndInspectsRealm) {
     EXPECT_TRUE(listed.contains(R"("id":1)"));
     EXPECT_TRUE(listed.contains(R"("wayland_socket":"")"));
     EXPECT_TRUE(listed.contains(R"("exit_code":-1)"));
+    EXPECT_TRUE(listed.contains(
+        R"("capabilities":{"observe":false,"pointer":false,"keyboard":false,"clipboard":false,"network":[],"filesystem_read":[],"filesystem_write":[],"secrets":[]})"));
 
     const auto info = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, R"(realm info codex "primary")");
     EXPECT_TRUE(info.contains("Realm codex \"primary\" (1):"));
     EXPECT_TRUE(info.contains("state: stopped"));
+    EXPECT_TRUE(info.contains("capabilities: observe=denied, pointer=denied, keyboard=denied"));
 }
 
 TEST_F(CRealmIPCTest, returnsStructuredUsefulErrors) {
@@ -119,6 +122,7 @@ TEST_F(CRealmIPCTest, controlsFullLifecycle) {
     EXPECT_TRUE(started.contains(R"("state":"creating")"));
     ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
     EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::AGENT);
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm grant lifecycle observe").starts_with("granted observe capability to realm"));
     EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm observe lifecycle").starts_with("observation allowed for realm"));
     EXPECT_EQ(realm->observationPermission(), eRealmObservationPermission::ALLOWED);
     EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm unobserve lifecycle").starts_with("observation denied for realm"));
@@ -144,10 +148,33 @@ TEST_F(CRealmIPCTest, controlsFullLifecycle) {
     EXPECT_FALSE(m_manager->realmByName("lifecycle"));
 }
 
+TEST_F(CRealmIPCTest, grantsAndRevokesOnlyEnforcedCapabilitiesThroughAdministrativeIPC) {
+    ASSERT_TRUE(m_manager->createRealm("policy realm"));
+    const auto realm = m_manager->realmByName("policy realm");
+    ASSERT_TRUE(realm);
+
+    auto response = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm grant policy realm keyboard");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    EXPECT_TRUE(response.contains(R"("keyboard":true)"));
+    EXPECT_TRUE(realm->capabilities().keyboard);
+
+    response = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm grant policy realm network");
+    EXPECT_TRUE(response.contains(R"("ok":false)"));
+    EXPECT_TRUE(response.contains("unknown or unenforced realm capability"));
+    EXPECT_TRUE(realm->capabilities().network.empty());
+
+    response = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm revoke policy realm keyboard");
+    EXPECT_TRUE(response.contains(R"("ok":true)"));
+    EXPECT_TRUE(response.contains(R"("keyboard":false)"));
+    EXPECT_FALSE(realm->capabilities().keyboard);
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm grant policy").contains("requires a name and capability"));
+}
+
 TEST_F(CRealmIPCTest, formatsLifecycleEventDataAsEscapedJSON) {
     auto created = m_manager->createRealm(R"(quoted"realm)");
     ASSERT_TRUE(created);
 
-    EXPECT_EQ(realmLifecycleEventData(SRealmLifecycleEvent{.type = eRealmLifecycleEvent::CREATED, .realm = *created}),
-              R"({"id":1,"name":"quoted\"realm","state":"stopped","input_owner":"none","observation_permission":"denied"})");
+    EXPECT_EQ(
+        realmLifecycleEventData(SRealmLifecycleEvent{.type = eRealmLifecycleEvent::CREATED, .realm = *created}),
+        R"({"id":1,"name":"quoted\"realm","state":"stopped","input_owner":"none","observation_permission":"denied","capabilities":{"observe":false,"pointer":false,"keyboard":false,"clipboard":false,"network":[],"filesystem_read":[],"filesystem_write":[],"secrets":[]}})");
 }
