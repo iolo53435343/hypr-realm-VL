@@ -41,6 +41,7 @@
 #include "protocols/SecurityContext.hpp"
 #include "protocols/ColorManagement.hpp"
 #include "render/Renderer.hpp"
+#include "realm/RealmManager.hpp"
 #include "xwayland/XWayland.hpp"
 #include "helpers/ByteOperations.hpp"
 
@@ -570,6 +571,10 @@ void CCompositor::cleanup() {
 
     m_isShuttingDown = true;
 
+    // Realms are Wayland clients of this compositor. Stop them while the host
+    // event loop and socket are still alive, before tearing down other managers.
+    Realm::manager().reset();
+
 #ifdef USES_SYSTEMD
     if (NSystemd::sdBooted() > 0 && !Env::envEnabled("HYPRLAND_NO_SD_NOTIFY"))
         NSystemd::sdNotify(0, "STOPPING=1");
@@ -754,6 +759,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 
             Log::logger->log(Log::DEBUG, "Creating the ANRManager!");
             g_pANRManager = makeUnique<CANRManager>();
+
+            Log::logger->log(Log::DEBUG, "Creating the RealmManager!");
+            Realm::manager() = makeUnique<Realm::CRealmManager>();
 
             Log::logger->log(Log::DEBUG, "Starting XWayland");
             g_pXWayland = makeUnique<CXWayland>(g_pCompositor->m_wantsXwayland);

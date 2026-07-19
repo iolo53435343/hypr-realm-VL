@@ -703,7 +703,12 @@ if(BUILD_TESTING OR WITH_TESTS)
   find_package(GTest CONFIG REQUIRED)
   include(GoogleTest)
   file(GLOB_RECURSE TESTFILES "tests/*.cpp")
+  add_executable(realm_process_helper tests/realm/RealmProcessHelper.cc)
   add_executable(hyprland_gtests ${TESTFILES})
+  add_dependencies(hyprland_gtests realm_process_helper)
+  target_compile_definitions(
+    hyprland_gtests
+    PRIVATE REALM_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_process_helper>")
   target_compile_options(hyprland_gtests PRIVATE --coverage)
   target_link_options(hyprland_gtests PRIVATE --coverage)
   target_include_directories(
