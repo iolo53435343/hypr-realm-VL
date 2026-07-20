@@ -14,45 +14,76 @@ let
       sha256 = locked.narHash;
     };
 
+  formatSecondsSinceEpoch =
+    timestamp:
+    let
+      remainder = x: y: x - x / y * y;
+      days = timestamp / 86400;
+      secondsInDay = remainder timestamp 86400;
+      hours = secondsInDay / 3600;
+      minutes = (remainder secondsInDay 3600) / 60;
+      seconds = remainder timestamp 60;
+      shiftedDays = days + 719468;
+      era = if shiftedDays >= 0 then shiftedDays / 146097 else (shiftedDays - 146096) / 146097;
+      dayOfEra = shiftedDays - era * 146097;
+      yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365;
+      year = yearOfEra + era * 400;
+      dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100);
+      monthPrime = (5 * dayOfYear + 2) / 153;
+      day = dayOfYear - (153 * monthPrime + 2) / 5 + 1;
+      month = monthPrime + (if monthPrime < 10 then 3 else -9);
+      adjustedYear = year + (if month <= 2 then 1 else 0);
+      pad = value: if builtins.stringLength value < 2 then "0${value}" else value;
+    in
+    "${toString adjustedYear}${pad (toString month)}${pad (toString day)}${pad (toString hours)}${pad (toString minutes)}${pad (toString seconds)}";
+
   nixpkgsSource = fetchLockedGitHub "nixpkgs";
+  nixpkgsLib = import "${nixpkgsSource}/lib";
+
+  mkLockedInput =
+    name:
+    let
+      locked = lock.nodes.${name}.locked;
+      source = fetchLockedGitHub name;
+      overlayFunction = import "${source}/nix/overlays.nix";
+      overlayArguments = {
+        self = input;
+        inputs.self = input;
+        lib = nixpkgsLib;
+      };
+      input = {
+        outPath = source;
+        inherit (locked) lastModified narHash rev;
+        shortRev = builtins.substring 0 7 locked.rev;
+        lastModifiedDate = formatSecondsSinceEpoch locked.lastModified;
+        overlays = overlayFunction (builtins.intersectAttrs (builtins.functionArgs overlayFunction) overlayArguments);
+      };
+    in
+    input;
+
+  inputs = builtins.mapAttrs (_: name: mkLockedInput name) lock.nodes.root.inputs;
+
+  self = {
+    outPath = ./.;
+    rev = "";
+    shortRev = "classic";
+    lastModifiedDate = "20260720";
+    sourceInfo.revCount = 0;
+    overlays = import ./nix/overlays.nix {
+      inherit inputs self;
+      lib = nixpkgsLib;
+    };
+  };
 
   pinnedPkgs = import nixpkgsSource {
     localSystem = pkgs.stdenv.hostPlatform.system;
-  };
-
-  guiutilsSource = fetchLockedGitHub "hyprland-guiutils";
-  guiutilsRevision = lock.nodes.hyprland-guiutils.locked.rev;
-
-  hyprland-guiutils = pinnedPkgs.callPackage "${guiutilsSource}/nix/default.nix" {
-    stdenv = pinnedPkgs.gcc15Stdenv;
-    version = "0.2.1+${builtins.substring 0 7 guiutilsRevision}";
-  };
-
-  glaze-hyprland = pinnedPkgs.glaze.override {
-    enableSSL = false;
-    enableInterop = false;
-  };
-
-  udis86-hyprland = pinnedPkgs.udis86.overrideAttrs {
-    src = pinnedPkgs.fetchFromGitHub {
-      owner = "canihavesomecoffee";
-      repo = "udis86";
-      rev = "5336633af70f3917760a6d441ff02d93477b0c86";
-      hash = "sha256-HifdUQPGsKQKQprByeIznvRLONdOXeolOsU5nkwIv3g=";
-    };
-    patches = [ ];
-  };
-
-  hypragent = pinnedPkgs.callPackage ./nix/default.nix {
-    stdenv = pinnedPkgs.gcc16Stdenv;
-    inherit glaze-hyprland hyprland-guiutils udis86-hyprland;
-    commit = "";
-    revCount = "";
-    date = "2026-07-20";
-    version = "0.55.0+agent-realms";
+    overlays = [
+      self.overlays.hyprland-packages
+      self.overlays.hyprland-extras
+    ];
   };
 in
-hypragent.overrideAttrs (oldAttrs: {
+pinnedPkgs.hyprland.overrideAttrs (oldAttrs: {
   passthru = (oldAttrs.passthru or { }) // {
     portalPackage = pinnedPkgs.xdg-desktop-portal-hyprland;
   };
