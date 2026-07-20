@@ -1,4 +1,5 @@
 #include <realm/RealmWindowManager.hpp>
+#include <realm/RealmDecoration.hpp>
 
 #include <gtest/gtest.h>
 
@@ -115,8 +116,17 @@ TEST_F(CRealmWindowManagerTest, takeoverRequiresHostWindowAndReleaseRestoresAgen
     EXPECT_FALSE(m_windowManager->takeoverRealm(realm->id()));
 
     ASSERT_TRUE(m_windowManager->associateWindow(42, realm->compositorPID()));
+    auto controls = realmDecorationControls(*realm);
+    ASSERT_EQ(controls.size(), 3);
+    EXPECT_EQ(controls[0].action, eRealmDecorationAction::TAKEOVER);
+    EXPECT_EQ(controls[0].label, "Take Over");
+
     ASSERT_TRUE(m_windowManager->takeoverRealm(realm->id()));
     EXPECT_EQ(realm->inputOwner(), eRealmInputOwner::HUMAN);
+    controls = realmDecorationControls(*realm);
+    ASSERT_EQ(controls.size(), 3);
+    EXPECT_EQ(controls[0].action, eRealmDecorationAction::RELEASE);
+    EXPECT_EQ(controls[0].label, "Release");
     EXPECT_FALSE(m_windowManager->takeoverRealm(realm->id()));
 
     ASSERT_TRUE(m_windowManager->releaseRealm(realm->id()));
@@ -125,6 +135,13 @@ TEST_F(CRealmWindowManagerTest, takeoverRequiresHostWindowAndReleaseRestoresAgen
 
     ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::POINTER));
     EXPECT_TRUE(realmWindowDecorationLabel(*realm).contains("capabilities: pointer"));
+
+    ASSERT_TRUE(m_manager->pauseRealm(realm->id()));
+    controls = realmDecorationControls(*realm);
+    ASSERT_EQ(controls.size(), 2);
+    EXPECT_EQ(controls[0].action, eRealmDecorationAction::RESUME);
+    EXPECT_EQ(controls[1].action, eRealmDecorationAction::STOP);
+    ASSERT_TRUE(m_manager->resumeRealm(realm->id()));
 }
 
 TEST(RealmWindowFormatting, includesEscapedInspectionMetadataAndReadableLabel) {

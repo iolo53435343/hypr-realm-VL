@@ -124,6 +124,12 @@ static xkb_keysym_t keysymForCodepoint(uint32_t codepoint) {
 }
 
 struct CWaylandInput::SImpl {
+    struct SInputAcknowledgement {
+        SImpl*       owner    = nullptr;
+        uint32_t     sequence = 0;
+        wl_callback* callback = nullptr;
+    };
+
     struct SCapture {
         SImpl*                    owner     = nullptr;
         uint32_t                  sequence  = 0;
@@ -146,6 +152,11 @@ struct CWaylandInput::SImpl {
     ~SImpl() {
         releaseAll();
         cleanupCapture();
+        for (const auto& acknowledgement : pendingInputAcknowledgements) {
+            if (acknowledgement->callback)
+                wl_callback_destroy(acknowledgement->callback);
+        }
+        pendingInputAcknowledgements.clear();
         if (keyboard)
             zwp_virtual_keyboard_v1_destroy(keyboard);
         if (pointer)
@@ -281,6 +292,47 @@ struct CWaylandInput::SImpl {
         state.stride    = stride;
     }
 
+    static void inputAcknowledged(void* data, wl_callback*, uint32_t) {
+        auto& acknowledgement = *static_cast<SInputAcknowledgement*>(data);
+        if (acknowledgement.owner)
+            acknowledgement.owner->finishInputAcknowledgement(&acknowledgement);
+    }
+
+    std::expected<void, std::string> queueInputAcknowledgement(uint32_t sequence) {
+        auto acknowledgement      = std::make_unique<SInputAcknowledgement>();
+        acknowledgement->owner    = this;
+        acknowledgement->sequence = sequence;
+        acknowledgement->callback = wl_display_sync(display);
+        if (!acknowledgement->callback)
+            return std::unexpected("failed creating a realm input acknowledgement");
+
+        static constexpr wl_callback_listener LISTENER = {
+            .done = inputAcknowledged,
+        };
+        if (wl_callback_add_listener(acknowledgement->callback, &LISTENER, acknowledgement.get()) < 0) {
+            wl_callback_destroy(acknowledgement->callback);
+            return std::unexpected("failed registering a realm input acknowledgement");
+        }
+
+        pendingInputAcknowledgements.emplace_back(std::move(acknowledgement));
+        return flush();
+    }
+
+    void finishInputAcknowledgement(SInputAcknowledgement* acknowledgement) {
+        const auto pending = std::ranges::find_if(pendingInputAcknowledgements, [acknowledgement](const auto& entry) { return entry.get() == acknowledgement; });
+        if (pending == pendingInputAcknowledgements.end())
+            return;
+
+        SWaylandResult result;
+        result.sequence         = acknowledgement->sequence;
+        result.message.type     = eRealmInputMessageType::INPUT_APPLIED;
+        result.message.sequence = acknowledgement->sequence;
+        wl_callback_destroy(acknowledgement->callback);
+        acknowledgement->callback = nullptr;
+        completedResults.emplace_back(std::move(result));
+        pendingInputAcknowledgements.erase(pending);
+    }
+
     static void captureFlags(void* data, zwlr_screencopy_frame_v1*, uint32_t flags) {
         auto& state = *static_cast<SCapture*>(data);
         if (state.owner && state.owner->capture.get() == &state)
@@ -323,9 +375,9 @@ struct CWaylandInput::SImpl {
         capture->owner    = this;
         capture->sequence = message.sequence;
         if (message.type == eRealmInputMessageType::CAPTURE)
-            capture->frame = zwlr_screencopy_manager_v1_capture_output(screencopyManager, 0, output);
+            capture->frame = zwlr_screencopy_manager_v1_capture_output(screencopyManager, 1, output);
         else
-            capture->frame = zwlr_screencopy_manager_v1_capture_output_region(screencopyManager, 0, output, static_cast<int32_t>(message.x), static_cast<int32_t>(message.y),
+            capture->frame = zwlr_screencopy_manager_v1_capture_output_region(screencopyManager, 1, output, static_cast<int32_t>(message.x), static_cast<int32_t>(message.y),
                                                                               static_cast<int32_t>(message.width), static_cast<int32_t>(message.height));
         if (!capture->frame) {
             capture.reset();
@@ -385,7 +437,7 @@ struct CWaylandInput::SImpl {
         if (!capture)
             return;
 
-        SWaylandCaptureResult result;
+        SWaylandResult result;
         result.sequence         = capture->sequence;
         result.message.type     = eRealmInputMessageType::CAPTURE_READY;
         result.message.sequence = capture->sequence;
@@ -407,18 +459,18 @@ struct CWaylandInput::SImpl {
 #if defined(__linux__) && defined(F_ADD_SEALS)
         fcntl(result.frameFD, F_ADD_SEALS, F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_WRITE | F_SEAL_SEAL);
 #endif
-        completedCaptures.emplace_back(std::move(result));
+        completedResults.emplace_back(std::move(result));
     }
 
     void failCapture(std::string error) {
         if (!capture)
             return;
 
-        SWaylandCaptureResult result;
+        SWaylandResult result;
         result.sequence = capture->sequence;
         result.error    = std::move(error);
         cleanupCapture();
-        completedCaptures.emplace_back(std::move(result));
+        completedResults.emplace_back(std::move(result));
     }
 
     void cancelCapture(uint32_t sequence) {
@@ -505,7 +557,7 @@ struct CWaylandInput::SImpl {
             zwp_virtual_keyboard_v1_key(keyboard, time, stroke.code, WL_KEYBOARD_KEY_STATE_RELEASED);
             zwp_virtual_keyboard_v1_modifiers(keyboard, 0, 0, 0, 0);
         }
-        return flush();
+        return {};
     }
 
     std::expected<void, std::string> handle(const SRealmInputMessage& message) {
@@ -515,7 +567,7 @@ struct CWaylandInput::SImpl {
             case eRealmInputMessageType::POINTER_MOVE:
                 zwlr_virtual_pointer_v1_motion_absolute(pointer, time, message.x, message.y, message.width, message.height);
                 zwlr_virtual_pointer_v1_frame(pointer);
-                return flush();
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::POINTER_BUTTON:
                 zwlr_virtual_pointer_v1_button(pointer, time, message.code, message.pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
@@ -523,12 +575,12 @@ struct CWaylandInput::SImpl {
                     pressedButtons.emplace(message.code);
                 else
                     pressedButtons.erase(message.code);
-                return flush();
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::POINTER_CLICK:
                 zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_PRESSED);
                 zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
-                return flush();
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::POINTER_SCROLL:
                 zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
                 if (message.vertical != 0)
@@ -536,25 +588,29 @@ struct CWaylandInput::SImpl {
                 if (message.horizontal != 0)
                     zwlr_virtual_pointer_v1_axis_discrete(pointer, time, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_int(message.horizontal * 15), message.horizontal);
                 zwlr_virtual_pointer_v1_frame(pointer);
-                return flush();
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::KEYBOARD_KEY:
                 zwp_virtual_keyboard_v1_key(keyboard, time, message.code, message.pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
                 if (message.pressed)
                     pressedKeys.emplace(message.code);
                 else
                     pressedKeys.erase(message.code);
-                return flush();
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::KEYBOARD_PRESS:
                 zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_PRESSED);
                 zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_RELEASED);
-                return flush();
-            case eRealmInputMessageType::KEYBOARD_TYPE: return typeText(message.text);
+                return queueInputAcknowledgement(message.sequence);
+            case eRealmInputMessageType::KEYBOARD_TYPE:
+                if (const auto typed = typeText(message.text); !typed)
+                    return typed;
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::CAPTURE:
             case eRealmInputMessageType::CAPTURE_REGION: return startCapture(message);
             case eRealmInputMessageType::CAPTURE_CANCEL: cancelCapture(message.sequence); return {};
             case eRealmInputMessageType::READY:
             case eRealmInputMessageType::ERROR:
-            case eRealmInputMessageType::CAPTURE_READY: return std::unexpected("status messages cannot be sent to the realm controller");
+            case eRealmInputMessageType::CAPTURE_READY:
+            case eRealmInputMessageType::INPUT_APPLIED: return std::unexpected("status messages cannot be sent to the realm controller");
         }
 
         return std::unexpected("unknown realm input command");
@@ -593,36 +649,37 @@ struct CWaylandInput::SImpl {
         return {};
     }
 
-    int                                 waylandFD         = -1;
-    wl_display*                         display           = nullptr;
-    wl_registry*                        registry          = nullptr;
-    wl_shm*                             shm               = nullptr;
-    wl_output*                          output            = nullptr;
-    uint32_t                            outputVersion     = 0;
-    wl_seat*                            seat              = nullptr;
-    zwp_virtual_keyboard_manager_v1*    keyboardManager   = nullptr;
-    zwlr_virtual_pointer_manager_v1*    pointerManager    = nullptr;
-    zwlr_screencopy_manager_v1*         screencopyManager = nullptr;
-    zwp_virtual_keyboard_v1*            keyboard          = nullptr;
-    zwlr_virtual_pointer_v1*            pointer           = nullptr;
-    xkb_context*                        context           = nullptr;
-    xkb_keymap*                         keymap            = nullptr;
-    std::map<uint32_t, SRealmKeyStroke> keyStrokes;
-    std::set<uint32_t>                  pressedKeys;
-    std::set<uint32_t>                  pressedButtons;
-    std::unique_ptr<SCapture>           capture;
-    std::vector<SWaylandCaptureResult>  completedCaptures;
+    int                                                 waylandFD         = -1;
+    wl_display*                                         display           = nullptr;
+    wl_registry*                                        registry          = nullptr;
+    wl_shm*                                             shm               = nullptr;
+    wl_output*                                          output            = nullptr;
+    uint32_t                                            outputVersion     = 0;
+    wl_seat*                                            seat              = nullptr;
+    zwp_virtual_keyboard_manager_v1*                    keyboardManager   = nullptr;
+    zwlr_virtual_pointer_manager_v1*                    pointerManager    = nullptr;
+    zwlr_screencopy_manager_v1*                         screencopyManager = nullptr;
+    zwp_virtual_keyboard_v1*                            keyboard          = nullptr;
+    zwlr_virtual_pointer_v1*                            pointer           = nullptr;
+    xkb_context*                                        context           = nullptr;
+    xkb_keymap*                                         keymap            = nullptr;
+    std::map<uint32_t, SRealmKeyStroke>                 keyStrokes;
+    std::set<uint32_t>                                  pressedKeys;
+    std::set<uint32_t>                                  pressedButtons;
+    std::unique_ptr<SCapture>                           capture;
+    std::vector<std::unique_ptr<SInputAcknowledgement>> pendingInputAcknowledgements;
+    std::vector<SWaylandResult>                         completedResults;
 };
 
-SWaylandCaptureResult::~SWaylandCaptureResult() {
+SWaylandResult::~SWaylandResult() {
     if (frameFD >= 0)
         close(frameFD);
 }
 
-SWaylandCaptureResult::SWaylandCaptureResult(SWaylandCaptureResult&& other) noexcept :
+SWaylandResult::SWaylandResult(SWaylandResult&& other) noexcept :
     sequence(other.sequence), message(std::move(other.message)), frameFD(std::exchange(other.frameFD, -1)), error(std::move(other.error)) {}
 
-SWaylandCaptureResult& SWaylandCaptureResult::operator=(SWaylandCaptureResult&& other) noexcept {
+SWaylandResult& SWaylandResult::operator=(SWaylandResult&& other) noexcept {
     if (this == &other)
         return *this;
     if (frameFD >= 0)
@@ -634,7 +691,7 @@ SWaylandCaptureResult& SWaylandCaptureResult::operator=(SWaylandCaptureResult&& 
     return *this;
 }
 
-int SWaylandCaptureResult::releaseFrameFD() {
+int SWaylandResult::releaseFrameFD() {
     return std::exchange(frameFD, -1);
 }
 
@@ -662,8 +719,8 @@ void CWaylandInput::releaseAll() {
     m_impl->releaseAll();
 }
 
-std::vector<SWaylandCaptureResult> CWaylandInput::takeCaptureResults() {
-    return std::exchange(m_impl->completedCaptures, {});
+std::vector<SWaylandResult> CWaylandInput::takeResults() {
+    return std::exchange(m_impl->completedResults, {});
 }
 
 int CWaylandInput::displayFD() const {

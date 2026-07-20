@@ -41,6 +41,7 @@ namespace Realm {
         size_t                    ratePerSecond          = 256;
         size_t                    burst                  = 512;
         std::chrono::milliseconds startupTimeout         = std::chrono::seconds(5);
+        std::chrono::milliseconds inputTimeout           = std::chrono::seconds(2);
         std::chrono::milliseconds captureTimeout         = std::chrono::seconds(3);
         size_t                    captureRatePerSecond   = 4;
         size_t                    captureBurst           = 2;
@@ -67,6 +68,12 @@ namespace Realm {
         std::string                    error;
     };
 
+    struct SRealmInputResult {
+        uint32_t    sequence = 0;
+        uint64_t    realmID  = 0;
+        std::string error;
+    };
+
     class CRealmInputControllerManager {
       public:
         explicit CRealmInputControllerManager(CRealmManager& manager);
@@ -75,6 +82,7 @@ namespace Realm {
 
         std::expected<uint32_t, SRealmInputError> sendInput(uint64_t realmID, SRealmInputMessage message);
         std::expected<uint64_t, SRealmInputError> requestCapture(uint64_t realmID, std::optional<SRealmCaptureRegion> region = std::nullopt);
+        void                                      setInputResultCallback(std::function<void(SRealmInputResult)> callback);
         void                                      setCaptureResultCallback(std::function<void(SRealmCaptureResult)> callback);
         bool                                      controllerReady(uint64_t realmID) const;
         std::string                               controllerError(uint64_t realmID) const;

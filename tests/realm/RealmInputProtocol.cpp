@@ -23,6 +23,7 @@ TEST(RealmInputProtocol, roundTripsEveryCommandShape) {
         SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_CANCEL, .sequence = 10},
         SRealmInputMessage{.type = eRealmInputMessageType::POINTER_CLICK, .sequence = 11, .code = 272},
         SRealmInputMessage{.type = eRealmInputMessageType::KEYBOARD_PRESS, .sequence = 12, .code = 30},
+        SRealmInputMessage{.type = eRealmInputMessageType::INPUT_APPLIED, .sequence = 12},
     };
 
     for (const auto& message : messages) {
@@ -60,7 +61,7 @@ TEST(RealmInputProtocol, rejectsMalformedAndOversizedPackets) {
     EXPECT_FALSE(decodeRealmInputMessage(badMagic.data(), badMagic.size()));
 
     auto badVersion = *packet;
-    badVersion[5]   = 3;
+    badVersion[5]   = 4;
     EXPECT_FALSE(decodeRealmInputMessage(badVersion.data(), badVersion.size()));
 
     auto badType = *packet;

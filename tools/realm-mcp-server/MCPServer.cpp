@@ -151,7 +151,7 @@ static constexpr std::string_view TOOLS_RESULT = R"json({"tools":[
   {"name":"realm_stop","description":"Stop the realm bound to this MCP server without destroying its record.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"title":"Stop bound realm","readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}},
   {"name":"enable_observation","description":"Enable runtime observation for the bound realm. The host must have granted its observe capability first.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"title":"Enable realm observation","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},
   {"name":"disable_observation","description":"Disable runtime observation for the bound realm and cancel pending captures.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"title":"Disable realm observation","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},
-  {"name":"capture_realm","description":"Capture the bound realm as a PNG image. Observation must already be enabled. Supply either all four region fields or none.","inputSchema":{"type":"object","properties":{"x":{"type":"integer","minimum":0,"maximum":1279},"y":{"type":"integer","minimum":0,"maximum":719},"width":{"type":"integer","minimum":1,"maximum":1280},"height":{"type":"integer","minimum":1,"maximum":720}},"additionalProperties":false},"annotations":{"title":"Capture bound realm","readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
+  {"name":"capture_realm","description":"Capture the bound realm as a PNG in the same stable 1280x720 coordinate space used by pointer input. Observation must already be enabled. Supply either all four region fields or none.","inputSchema":{"type":"object","properties":{"x":{"type":"integer","minimum":0,"maximum":1279},"y":{"type":"integer","minimum":0,"maximum":719},"width":{"type":"integer","minimum":1,"maximum":1280},"height":{"type":"integer","minimum":1,"maximum":720}},"additionalProperties":false},"annotations":{"title":"Capture bound realm","readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
   {"name":"move_pointer","description":"Move the virtual pointer inside the bound realm. The host must have granted its pointer capability.","inputSchema":{"type":"object","properties":{"x":{"type":"integer","minimum":0,"maximum":1279},"y":{"type":"integer","minimum":0,"maximum":719}},"required":["x","y"],"additionalProperties":false},"annotations":{"title":"Move realm pointer","readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},
   {"name":"click","description":"Press and release a virtual pointer button inside the bound realm.","inputSchema":{"type":"object","properties":{"button":{"type":"string","enum":["left","right","middle"]}},"required":["button"],"additionalProperties":false},"annotations":{"title":"Click in realm","readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}},
   {"name":"scroll","description":"Scroll the virtual pointer inside the bound realm by a bounded number of steps.","inputSchema":{"type":"object","properties":{"axis":{"type":"string","enum":["horizontal","vertical"]},"steps":{"type":"integer","minimum":-20,"maximum":20,"not":{"const":0}}},"required":["axis","steps"],"additionalProperties":false},"annotations":{"title":"Scroll in realm","readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},
@@ -169,7 +169,7 @@ static const std::string&         toolsResult() {
     return result;
 }
 
-static std::expected<std::vector<uint8_t>, std::string> encodePNG(const SCaptureFrame& frame) {
+static std::expected<std::vector<uint8_t>, std::string> encodePNG(const SCaptureFrame& frame, std::optional<SCaptureRegion> region) {
     if (frame.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) || frame.height > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
         frame.stride > static_cast<uint32_t>(std::numeric_limits<int>::max()))
         return std::unexpected("capture dimensions cannot be encoded as PNG");
@@ -186,13 +186,49 @@ static std::expected<std::vector<uint8_t>, std::string> encodePNG(const SCapture
         }
     }
 
-    cairo_surface_t* surface = cairo_image_surface_create_for_data(pixels.data(), frame.format == 0 ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24, static_cast<int>(frame.width),
-                                                                   static_cast<int>(frame.height), static_cast<int>(frame.stride));
-    if (!surface)
-        return std::unexpected("failed creating PNG surface");
-    if (const auto status = cairo_surface_status(surface); status != CAIRO_STATUS_SUCCESS) {
-        const auto message = std::format("failed creating PNG surface: {}", cairo_status_to_string(status));
-        cairo_surface_destroy(surface);
+    cairo_surface_t* source = cairo_image_surface_create_for_data(pixels.data(), frame.format == 0 ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24, static_cast<int>(frame.width),
+                                                                  static_cast<int>(frame.height), static_cast<int>(frame.stride));
+    if (!source)
+        return std::unexpected("failed creating realm capture source surface");
+    if (const auto status = cairo_surface_status(source); status != CAIRO_STATUS_SUCCESS) {
+        const auto message = std::format("failed creating realm capture source surface: {}", cairo_status_to_string(status));
+        cairo_surface_destroy(source);
+        return std::unexpected(message);
+    }
+
+    const auto       outputWidth  = region ? region->width : REALM_INPUT_OUTPUT_WIDTH;
+    const auto       outputHeight = region ? region->height : REALM_INPUT_OUTPUT_HEIGHT;
+    cairo_surface_t* output       = cairo_image_surface_create(CAIRO_FORMAT_RGB24, static_cast<int>(outputWidth), static_cast<int>(outputHeight));
+    if (!output || cairo_surface_status(output) != CAIRO_STATUS_SUCCESS) {
+        const auto message = std::format("failed creating normalized realm capture surface: {}", output ? cairo_status_to_string(cairo_surface_status(output)) : "out of memory");
+        if (output)
+            cairo_surface_destroy(output);
+        cairo_surface_destroy(source);
+        return std::unexpected(message);
+    }
+
+    cairo_surface_mark_dirty(source);
+    cairo_t* context = cairo_create(output);
+    if (!context || cairo_status(context) != CAIRO_STATUS_SUCCESS) {
+        const auto message = std::format("failed creating normalized realm capture context: {}", context ? cairo_status_to_string(cairo_status(context)) : "out of memory");
+        if (context)
+            cairo_destroy(context);
+        cairo_surface_destroy(output);
+        cairo_surface_destroy(source);
+        return std::unexpected(message);
+    }
+
+    cairo_translate(context, -static_cast<double>(region ? region->x : 0), -static_cast<double>(region ? region->y : 0));
+    cairo_scale(context, static_cast<double>(REALM_INPUT_OUTPUT_WIDTH) / frame.width, static_cast<double>(REALM_INPUT_OUTPUT_HEIGHT) / frame.height);
+    cairo_set_source_surface(context, source, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(context), CAIRO_FILTER_BILINEAR);
+    cairo_paint(context);
+    const auto paintStatus = cairo_status(context);
+    cairo_destroy(context);
+    cairo_surface_destroy(source);
+    if (paintStatus != CAIRO_STATUS_SUCCESS) {
+        const auto message = std::format("failed normalizing realm capture: {}", cairo_status_to_string(paintStatus));
+        cairo_surface_destroy(output);
         return std::unexpected(message);
     }
 
@@ -204,9 +240,9 @@ static std::expected<std::vector<uint8_t>, std::string> encodePNG(const SCapture
         output.insert(output.end(), data, data + size);
         return CAIRO_STATUS_SUCCESS;
     };
-    cairo_surface_mark_dirty(surface);
-    const auto status = cairo_surface_write_to_png_stream(surface, writePNG, &png);
-    cairo_surface_destroy(surface);
+    cairo_surface_flush(output);
+    const auto status = cairo_surface_write_to_png_stream(output, writePNG, &png);
+    cairo_surface_destroy(output);
     if (status != CAIRO_STATUS_SUCCESS)
         return std::unexpected(std::format("failed encoding realm capture as PNG: {}", cairo_status_to_string(status)));
     return png;
@@ -372,32 +408,32 @@ std::string CMCPServer::callTool(std::string_view parametersJSON) {
         auto arguments = parseArguments<SPointerMoveArguments>(parameters.arguments);
         if (!arguments || !arguments->x || !arguments->y || *arguments->x >= REALM_INPUT_OUTPUT_WIDTH || *arguments->y >= REALM_INPUT_OUTPUT_HEIGHT)
             return toolError(arguments ? "x and y must be coordinates inside the 1280x720 realm output" : arguments.error());
-        return controlResult(m_controlClient.movePointer(*arguments->x, *arguments->y), "Pointer move queued in the bound realm.");
+        return controlResult(m_controlClient.movePointer(*arguments->x, *arguments->y), "Pointer moved in the bound realm.");
     }
     if (*parameters.name == "click") {
         auto arguments = parseArguments<SClickArguments>(parameters.arguments);
         if (!arguments || !arguments->button || (*arguments->button != "left" && *arguments->button != "right" && *arguments->button != "middle"))
             return toolError(arguments ? "button must be left, right, or middle" : arguments.error());
-        return controlResult(m_controlClient.clickPointer(*arguments->button), "Pointer click queued in the bound realm.");
+        return controlResult(m_controlClient.clickPointer(*arguments->button), "Pointer clicked in the bound realm.");
     }
     if (*parameters.name == "scroll") {
         auto arguments = parseArguments<SScrollArguments>(parameters.arguments);
         if (!arguments || !arguments->axis || !arguments->steps || (*arguments->axis != "horizontal" && *arguments->axis != "vertical") || *arguments->steps == 0 ||
             *arguments->steps < -20 || *arguments->steps > 20)
             return toolError(arguments ? "axis must be horizontal or vertical and steps must be between -20 and 20, excluding zero" : arguments.error());
-        return controlResult(m_controlClient.scrollPointer(*arguments->axis, *arguments->steps), "Pointer scroll queued in the bound realm.");
+        return controlResult(m_controlClient.scrollPointer(*arguments->axis, *arguments->steps), "Pointer scrolled in the bound realm.");
     }
     if (*parameters.name == "press_key") {
         auto arguments = parseArguments<SKeyArguments>(parameters.arguments);
         if (!arguments || !arguments->keycode || *arguments->keycode > KEY_MAX)
             return toolError(arguments ? std::format("keycode must not exceed {}", KEY_MAX) : arguments.error());
-        return controlResult(m_controlClient.pressKey(*arguments->keycode), "Key press queued in the bound realm.");
+        return controlResult(m_controlClient.pressKey(*arguments->keycode), "Key pressed in the bound realm.");
     }
     if (*parameters.name == "type_text") {
         auto arguments = parseArguments<STextArguments>(parameters.arguments);
         if (!arguments || !arguments->text || arguments->text->empty() || arguments->text->size() > REALM_INPUT_MAX_TEXT_SIZE || arguments->text->contains('\0'))
             return toolError(arguments ? std::format("text must contain 1 to {} bytes without NUL", REALM_INPUT_MAX_TEXT_SIZE) : arguments.error());
-        return controlResult(m_controlClient.typeText(*arguments->text), "Text input queued in the bound realm.");
+        return controlResult(m_controlClient.typeText(*arguments->text), "Text entered in the bound realm.");
     }
     if (*parameters.name == "capture_realm") {
         auto arguments = parseArguments<SCaptureArguments>(parameters.arguments);
@@ -416,15 +452,18 @@ std::string CMCPServer::callTool(std::string_view parametersJSON) {
             region = SCaptureRegion{.x = *arguments->x, .y = *arguments->y, .width = *arguments->width, .height = *arguments->height};
         }
 
-        auto capture = m_controlClient.capture(region);
+        auto capture = m_controlClient.capture(std::nullopt);
         if (!capture)
             return toolError(capture.error());
-        auto png = encodePNG(*capture);
+        auto png = encodePNG(*capture, region);
         if (!png)
             return toolError(png.error());
-        const auto metadata = std::format(R"({{"realm":{},"width":{},"height":{},"mimeType":"image/png"}})", quoteJSON(m_controlClient.realm()), capture->width, capture->height);
+        const auto outputWidth  = region ? region->width : REALM_INPUT_OUTPUT_WIDTH;
+        const auto outputHeight = region ? region->height : REALM_INPUT_OUTPUT_HEIGHT;
+        const auto metadata     = std::format(R"({{"realm":{},"width":{},"height":{},"source_width":{},"source_height":{},"mimeType":"image/png"}})",
+                                              quoteJSON(m_controlClient.realm()), outputWidth, outputHeight, capture->width, capture->height);
         return std::format(R"({{"content":[{{"type":"image","data":{},"mimeType":"image/png"}},{{"type":"text","text":{}}}],"structuredContent":{},"isError":false}})",
-                           quoteJSON(base64Encode(*png)), quoteJSON(std::format("Captured {}x{} PNG from realm '{}'.", capture->width, capture->height, m_controlClient.realm())),
+                           quoteJSON(base64Encode(*png)), quoteJSON(std::format("Captured {}x{} PNG from realm '{}'.", outputWidth, outputHeight, m_controlClient.realm())),
                            metadata);
     }
 

@@ -7,13 +7,13 @@
 #include <string>
 #include <vector>
 
-struct SWaylandCaptureResult {
-    SWaylandCaptureResult() = default;
-    ~SWaylandCaptureResult();
-    SWaylandCaptureResult(const SWaylandCaptureResult&)            = delete;
-    SWaylandCaptureResult& operator=(const SWaylandCaptureResult&) = delete;
-    SWaylandCaptureResult(SWaylandCaptureResult&& other) noexcept;
-    SWaylandCaptureResult&    operator=(SWaylandCaptureResult&& other) noexcept;
+struct SWaylandResult {
+    SWaylandResult() = default;
+    ~SWaylandResult();
+    SWaylandResult(const SWaylandResult&)            = delete;
+    SWaylandResult& operator=(const SWaylandResult&) = delete;
+    SWaylandResult(SWaylandResult&& other) noexcept;
+    SWaylandResult&           operator=(SWaylandResult&& other) noexcept;
 
     int                       releaseFrameFD();
 
@@ -28,13 +28,13 @@ class CWaylandInput {
     explicit CWaylandInput(int waylandFD);
     ~CWaylandInput();
 
-    std::expected<void, std::string>   initialize();
-    std::expected<void, std::string>   handle(const Realm::SRealmInputMessage& message);
-    std::expected<void, std::string>   dispatch();
-    std::expected<void, std::string>   flush();
-    void                               releaseAll();
-    std::vector<SWaylandCaptureResult> takeCaptureResults();
-    int                                displayFD() const;
+    std::expected<void, std::string> initialize();
+    std::expected<void, std::string> handle(const Realm::SRealmInputMessage& message);
+    std::expected<void, std::string> dispatch();
+    std::expected<void, std::string> flush();
+    void                             releaseAll();
+    std::vector<SWaylandResult>      takeResults();
+    int                              displayFD() const;
 
   private:
     struct SImpl;

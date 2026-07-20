@@ -316,6 +316,16 @@ TEST_F(CRealmControlServerTest, routesInputOnlyToAReadyAgentOwnedRealm) {
     EXPECT_TRUE(response.contains(R"("ok":true)"));
     ASSERT_TRUE(waitForControllerLog(*realm, "POINTER_CLICK"));
 
+    auto client = connectClient();
+    ASSERT_TRUE(client.isValid());
+    const auto framedInput = realmControlFrame(R"({"request_id":"applied","method":"pointer.move","params":{"realm":"input","x":30,"y":40}})");
+    ASSERT_EQ(send(client.get(), framedInput.data(), framedInput.size(), MSG_NOSIGNAL), static_cast<ssize_t>(framedInput.size()));
+    const auto applied = receiveResponsesWithDescriptor(client, 2);
+    ASSERT_EQ(applied.responses.size(), 2);
+    EXPECT_TRUE(applied.responses[0].contains(R"("action":"queued")"));
+    EXPECT_TRUE(applied.responses[1].contains(R"("event":"realm.input.applied")"));
+    EXPECT_FALSE(applied.descriptor.isValid());
+
     ASSERT_TRUE(m_manager->stopRealm(realm->id()));
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::STOPPED));
     EXPECT_FALSE(m_inputController->controllerReady(realm->id()));

@@ -11,6 +11,7 @@
 #include "../protocols/InputCapture.hpp"
 #include "debug/log/Logger.hpp"
 #include "../managers/eventLoop/EventLoopManager.hpp"
+#include "../render/pass/BorderPassElement.hpp"
 #include "../render/pass/ClearPassElement.hpp"
 #include "../render/pass/TexPassElement.hpp"
 #include "../managers/input/InputManager.hpp"
@@ -36,6 +37,29 @@ using namespace Pointer;
 UP<CPointerManager>& Pointer::mgr() {
     static UP<CPointerManager> p = makeUnique<CPointerManager>();
     return p;
+}
+
+static bool realmCursorIndicatorEnabled() {
+    static const bool ENABLED = [] {
+        const auto* realmID = getenv("HYPRLAND_REALM_ID");
+        return realmID && *realmID;
+    }();
+    return ENABLED;
+}
+
+static CBox realmCursorIndicatorBox(const Vector2D& position) {
+    static constexpr double INDICATOR_SIZE = 20.0;
+    return CBox{position - Vector2D{INDICATOR_SIZE / 2.0, INDICATOR_SIZE / 2.0}, {INDICATOR_SIZE, INDICATOR_SIZE}};
+}
+
+static CBox realmCursorDamageBox(const Vector2D& position) {
+    return realmCursorIndicatorBox(position).expand(4.0);
+}
+
+static CBox boundingBoxFor(const CBox& first, const CBox& second) {
+    const auto x = std::min(first.x, second.x);
+    const auto y = std::min(first.y, second.y);
+    return CBox{x, y, std::max(first.x + first.w, second.x + second.w) - x, std::max(first.y + first.h, second.y + second.h) - y};
 }
 
 CPointerManager::CPointerManager() {
@@ -665,14 +689,17 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
         box.translate(-m_currentCursorImage.hotspot);
     }
 
-    if (box.intersection(CBox{{}, {pMonitor->m_size}}).empty())
+    auto renderBounds = box;
+    if (realmCursorIndicatorEnabled())
+        renderBounds = boundingBoxFor(renderBounds, realmCursorDamageBox(overridePos.value_or(box.pos() + m_currentCursorImage.hotspot)));
+    if (renderBounds.intersection(CBox{{}, {pMonitor->m_size}}).empty())
         return;
 
     auto texture = getCurrentCursorTexture();
     if (!texture)
         return;
 
-    const auto logicalBox = box.copy();
+    auto logicalBox = box.copy();
 
     box.scale(pMonitor->m_scale);
     box.x = std::round(box.x);
@@ -683,6 +710,25 @@ void CPointerManager::renderSoftwareCursorsFor(PHLMONITOR pMonitor, const Time::
     data.box = box.round();
 
     g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
+
+    if (realmCursorIndicatorEnabled()) {
+        const auto cursorPosition = overridePos.value_or(logicalBox.pos() + m_currentCursorImage.hotspot);
+        auto       indicatorBox   = realmCursorIndicatorBox(cursorPosition);
+        logicalBox                = boundingBoxFor(logicalBox, realmCursorDamageBox(cursorPosition));
+        indicatorBox.scale(pMonitor->m_scale).round();
+
+        CBorderPassElement::SBorderData indicator;
+        indicator.box   = indicatorBox;
+        indicator.grad1 = Config::CGradientValueData{
+            std::vector<CHyprColor>{CHyprColor{1.F, 0.36F, 0.08F, 1.F}, CHyprColor{0.96F, 0.12F, 0.68F, 1.F}},
+            0.F,
+        };
+        indicator.round         = sc<int>(std::round(indicatorBox.w / 2.0));
+        indicator.outerRound    = indicator.round;
+        indicator.roundingPower = 2.F;
+        indicator.borderSize    = 2;
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(indicator));
+    }
 
     // to erase the leftover in updateCursorBackend()
     if (!screencopy) {
@@ -798,6 +844,8 @@ Vector2D CPointerManager::closestValid(const Vector2D& pos) {
 
 void CPointerManager::damageIfSoftware() {
     auto b = getCursorBoxGlobal().expand(4);
+    if (realmCursorIndicatorEnabled())
+        b = boundingBoxFor(b, realmCursorDamageBox(m_pointerPos));
 
     for (auto const& mw : m_monitorStates) {
         auto monitor = mw->monitor.lock();
@@ -1157,7 +1205,10 @@ void CPointerManager::damageCursor(PHLMONITOR pMonitor, bool skipFrameSchedule) 
         if (mw->monitor != pMonitor)
             continue;
 
-        auto b = getCursorBoxGlobal().intersection(pMonitor->logicalBox());
+        auto b = getCursorBoxGlobal();
+        if (realmCursorIndicatorEnabled())
+            b = boundingBoxFor(b, realmCursorDamageBox(m_pointerPos));
+        b = b.intersection(pMonitor->logicalBox());
 
         if (b.empty())
             return;

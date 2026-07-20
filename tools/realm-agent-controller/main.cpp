@@ -77,8 +77,8 @@ static bool sendError(int controlFD, uint32_t sequence, std::string message) {
     return sendStatus(controlFD, status) == static_cast<ssize_t>(packet->size());
 }
 
-static void queueCaptureResults(CWaylandInput& input, std::deque<SWaylandCaptureResult>& outgoing) {
-    for (auto& result : input.takeCaptureResults()) {
+static void queueResults(CWaylandInput& input, std::deque<SWaylandResult>& outgoing) {
+    for (auto& result : input.takeResults()) {
         if (!result.error.empty())
             result.message = SRealmInputMessage{
                 .type     = eRealmInputMessageType::ERROR,
@@ -89,7 +89,7 @@ static void queueCaptureResults(CWaylandInput& input, std::deque<SWaylandCapture
     }
 }
 
-static bool flushCaptureResults(int controlFD, std::deque<SWaylandCaptureResult>& outgoing) {
+static bool flushResults(int controlFD, std::deque<SWaylandResult>& outgoing) {
     while (!outgoing.empty()) {
         auto packet = encodeRealmInputMessage(outgoing.front().message);
         if (!packet)
@@ -138,9 +138,9 @@ int main(int argc, char** argv) {
     if (!readyPacket || sendStatus(*controlFD, ready) != static_cast<ssize_t>(readyPacket->size()))
         return 1;
 
-    std::deque<SWaylandCaptureResult> outgoing;
+    std::deque<SWaylandResult> outgoing;
     while (!EXIT_REQUESTED) {
-        if (!flushCaptureResults(*controlFD, outgoing))
+        if (!flushResults(*controlFD, outgoing))
             break;
         std::array<pollfd, 2> descriptors = {
             pollfd{.fd = *controlFD, .events = static_cast<short>(POLLIN | (outgoing.empty() ? 0 : POLLOUT))},
@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
                 std::cerr << dispatched.error() << '\n';
                 break;
             }
-            queueCaptureResults(input, outgoing);
+            queueResults(input, outgoing);
         }
 
         if (descriptors[0].revents & (POLLERR | POLLNVAL))
@@ -177,17 +177,17 @@ int main(int argc, char** argv) {
 
             auto message = decodeRealmInputMessage(packet.data(), static_cast<size_t>(received));
             if (!message) {
-                SWaylandCaptureResult error;
+                SWaylandResult error;
                 error.message = SRealmInputMessage{.type = eRealmInputMessageType::ERROR, .text = message.error()};
                 outgoing.emplace_back(std::move(error));
                 continue;
             }
             if (const auto handled = input.handle(*message); !handled) {
-                SWaylandCaptureResult error;
+                SWaylandResult error;
                 error.message = SRealmInputMessage{.type = eRealmInputMessageType::ERROR, .sequence = message->sequence, .text = handled.error()};
                 outgoing.emplace_back(std::move(error));
             }
-            queueCaptureResults(input, outgoing);
+            queueResults(input, outgoing);
         }
         if (descriptors[0].revents & POLLHUP)
             break;

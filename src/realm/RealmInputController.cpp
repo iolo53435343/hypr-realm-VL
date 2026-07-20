@@ -218,10 +218,16 @@ static void closeControllerFDsExcept(int waylandFD, int controlFD) {
 
 struct CRealmInputControllerManager::SImpl {
     struct SController {
+        struct SPendingInput {
+            std::chrono::steady_clock::time_point deadline;
+        };
+
         struct SPendingCapture {
             uint64_t                              captureID = 0;
             uint32_t                              sequence  = 0;
             std::chrono::steady_clock::time_point deadline;
+            SRealmInputMessage                    message;
+            size_t                                attempts = 1;
         };
 
         pid_t                                 pid = 0;
@@ -235,6 +241,7 @@ struct CRealmInputControllerManager::SImpl {
         uint32_t                              nextSequence  = 1;
         double                                captureTokens = 0;
         std::chrono::steady_clock::time_point lastCaptureRefill;
+        std::map<uint32_t, SPendingInput>     pendingInputs;
         std::optional<SPendingCapture>        pendingCapture;
         std::set<uint32_t>                    ignoredCaptureSequences;
     };
@@ -256,8 +263,10 @@ struct CRealmInputControllerManager::SImpl {
 
         lifecycleListener   = manager.m_events.lifecycle.listen([this](const SRealmLifecycleEvent& event) { handleLifecycle(event); });
         ownerListener       = manager.m_events.inputOwner.listen([this](const SRealmInputOwnerEvent& event) {
-            if (event.realm && event.owner != eRealmInputOwner::AGENT)
+            if (event.realm && event.owner != eRealmInputOwner::AGENT) {
                 releaseAll(event.realm->id());
+                cancelInputs(event.realm->id(), "realm agent input ownership was revoked");
+            }
         });
         observationListener = manager.m_events.observationPermission.listen([this](const SRealmObservationPermissionEvent& event) {
             if (event.realm && event.permission == eRealmObservationPermission::DENIED)
@@ -268,8 +277,10 @@ struct CRealmInputControllerManager::SImpl {
                 return;
             if (event.capability == eRealmCapability::OBSERVE)
                 cancelCapture(event.realm->id(), "realm observe capability was revoked");
-            else
+            else {
                 releaseAll(event.realm->id());
+                cancelInputs(event.realm->id(), std::format("realm {} capability was revoked", realmCapabilityName(event.capability)));
+            }
         });
         setupMaintenanceTimer();
     }
@@ -321,8 +332,10 @@ struct CRealmInputControllerManager::SImpl {
             return;
         }
 
-        if (event.type == eRealmLifecycleEvent::PAUSED)
+        if (event.type == eRealmLifecycleEvent::PAUSED) {
+            cancelInputs(event.realm->id(), "realm was paused before the input completed");
             cancelCapture(event.realm->id(), "realm was paused before the capture completed");
+        }
 
         if (event.type == eRealmLifecycleEvent::STOPPED || event.type == eRealmLifecycleEvent::FAILED || event.type == eRealmLifecycleEvent::DESTROYED)
             stopController(event.realm->id());
@@ -338,8 +351,9 @@ struct CRealmInputControllerManager::SImpl {
             std::nullopt,
             [this](SP<CEventLoopTimer> self, void*) {
                 dispatchMaintenance();
-                if (!shuttingDown &&
-                    (!reaping.empty() || std::ranges::any_of(controllers, [](const auto& entry) { return !entry.second.ready || entry.second.pendingCapture.has_value(); })))
+                if (!shuttingDown && (!reaping.empty() || std::ranges::any_of(controllers, [](const auto& entry) {
+                        return !entry.second.ready || !entry.second.pendingInputs.empty() || entry.second.pendingCapture.has_value();
+                    })))
                     self->updateTimeout(std::chrono::milliseconds(50));
             },
             nullptr);
@@ -430,6 +444,7 @@ struct CRealmInputControllerManager::SImpl {
             return;
 
         releaseAll(realmID);
+        cancelInputs(realmID, "realm input controller stopped before the input completed");
         cancelCapture(realmID, "realm input controller stopped before the capture completed");
         if (controller->second.eventSource)
             wl_event_source_remove(controller->second.eventSource);
@@ -472,6 +487,25 @@ struct CRealmInputControllerManager::SImpl {
             .realmID   = realmID,
             .error     = std::move(error),
         });
+    }
+
+    void cancelInputs(uint64_t realmID, std::string error) {
+        const auto controller = controllers.find(realmID);
+        if (controller == controllers.end() || controller->second.pendingInputs.empty())
+            return;
+
+        auto pending = std::exchange(controller->second.pendingInputs, {});
+        for (const auto& [sequence, _] : pending)
+            emitInputResult(SRealmInputResult{
+                .sequence = sequence,
+                .realmID  = realmID,
+                .error    = error,
+            });
+    }
+
+    void emitInputResult(SRealmInputResult result) {
+        if (inputResultCallback)
+            inputResultCallback(std::move(result));
     }
 
     void emitCaptureResult(SRealmCaptureResult result) {
@@ -539,6 +573,8 @@ struct CRealmInputControllerManager::SImpl {
         if (const auto sent = sendMessage(state, message); !sent)
             return std::unexpected(sent.error());
         state.tokens -= static_cast<double>(cost);
+        state.pendingInputs.emplace(message.sequence, SController::SPendingInput{.deadline = now + options.inputTimeout});
+        scheduleMaintenance();
         return message.sequence;
     }
 
@@ -596,6 +632,7 @@ struct CRealmInputControllerManager::SImpl {
             .captureID = captureID,
             .sequence  = message.sequence,
             .deadline  = now + options.captureTimeout,
+            .message   = message,
         };
         scheduleMaintenance();
         return captureID;
@@ -621,6 +658,7 @@ struct CRealmInputControllerManager::SImpl {
 
         const auto realmID = controller->first;
         const auto error   = controller->second.error.empty() ? "realm input controller disconnected" : controller->second.error;
+        cancelInputs(realmID, error);
         cancelCapture(realmID, error);
         controller = controllers.find(realmID);
         if (controller == controllers.end())
@@ -688,7 +726,14 @@ struct CRealmInputControllerManager::SImpl {
                     const auto error = message->text.empty() ? "realm controller reported an error" : message->text;
                     if (controller.ignoredCaptureSequences.erase(message->sequence) > 0)
                         continue;
-                    if (controller.pendingCapture && controller.pendingCapture->sequence == message->sequence) {
+                    if (const auto pendingInput = controller.pendingInputs.find(message->sequence); pendingInput != controller.pendingInputs.end()) {
+                        controller.pendingInputs.erase(pendingInput);
+                        emitInputResult(SRealmInputResult{
+                            .sequence = message->sequence,
+                            .realmID  = realmID,
+                            .error    = error,
+                        });
+                    } else if (controller.pendingCapture && controller.pendingCapture->sequence == message->sequence) {
                         const auto captureID = controller.pendingCapture->captureID;
                         controller.pendingCapture.reset();
                         emitCaptureResult(SRealmCaptureResult{
@@ -700,6 +745,19 @@ struct CRealmInputControllerManager::SImpl {
                         controller.error = error;
                     if (Log::logger)
                         Log::logger->log(Log::ERR, "Realm {} controller: {}", realmID, error);
+                } else if (message->type == eRealmInputMessageType::INPUT_APPLIED) {
+                    if (receivedFD.isValid()) {
+                        controller.error = "realm controller attached a descriptor to an input acknowledgement";
+                        return false;
+                    }
+                    const auto pending = controller.pendingInputs.find(message->sequence);
+                    if (pending == controller.pendingInputs.end())
+                        continue;
+                    controller.pendingInputs.erase(pending);
+                    emitInputResult(SRealmInputResult{
+                        .sequence = message->sequence,
+                        .realmID  = realmID,
+                    });
                 } else if (message->type == eRealmInputMessageType::CAPTURE_READY) {
                     if (controller.ignoredCaptureSequences.erase(message->sequence) > 0)
                         continue;
@@ -797,17 +855,51 @@ struct CRealmInputControllerManager::SImpl {
     }
 
     void dispatchMaintenance() {
-        const auto            now = std::chrono::steady_clock::now();
-        std::vector<uint64_t> timedOut;
-        std::vector<uint64_t> capturesTimedOut;
+        const auto                                 now = std::chrono::steady_clock::now();
+        std::vector<uint64_t>                      timedOut;
+        std::vector<std::pair<uint64_t, uint32_t>> inputsTimedOut;
+        std::vector<uint64_t>                      capturesTimedOut;
         for (const auto& [realmID, controller] : controllers) {
             if (!controller.ready && now >= controller.startupDeadline)
                 timedOut.emplace_back(realmID);
+            for (const auto& [sequence, pending] : controller.pendingInputs) {
+                if (now >= pending.deadline)
+                    inputsTimedOut.emplace_back(realmID, sequence);
+            }
             if (controller.pendingCapture && now >= controller.pendingCapture->deadline)
                 capturesTimedOut.emplace_back(realmID);
         }
-        for (const auto realmID : capturesTimedOut)
-            cancelCapture(realmID, "realm capture timed out");
+        for (const auto& [realmID, sequence] : inputsTimedOut) {
+            const auto controller = controllers.find(realmID);
+            if (controller == controllers.end() || controller->second.pendingInputs.erase(sequence) == 0)
+                continue;
+            emitInputResult(SRealmInputResult{
+                .sequence = sequence,
+                .realmID  = realmID,
+                .error    = "realm input acknowledgement timed out",
+            });
+        }
+        for (const auto realmID : capturesTimedOut) {
+            const auto controller = controllers.find(realmID);
+            if (controller == controllers.end() || !controller->second.pendingCapture)
+                continue;
+            auto& pending = *controller->second.pendingCapture;
+            if (pending.attempts >= 2) {
+                cancelCapture(realmID, "realm capture timed out after retrying");
+                continue;
+            }
+
+            controller->second.ignoredCaptureSequences.emplace(pending.sequence);
+            if (controller->second.ignoredCaptureSequences.size() > 64)
+                controller->second.ignoredCaptureSequences.erase(controller->second.ignoredCaptureSequences.begin());
+            sendMessage(controller->second, SRealmInputMessage{.type = eRealmInputMessageType::CAPTURE_CANCEL, .sequence = pending.sequence});
+            pending.sequence         = takeSequence(controller->second);
+            pending.message.sequence = pending.sequence;
+            pending.deadline         = now + options.captureTimeout;
+            ++pending.attempts;
+            if (const auto sent = sendMessage(controller->second, pending.message); !sent)
+                cancelCapture(realmID, sent.error().message);
+        }
         for (const auto realmID : timedOut) {
             failures[realmID] = "realm input controller timed out during startup";
             stopController(realmID);
@@ -839,6 +931,7 @@ struct CRealmInputControllerManager::SImpl {
     CHyprSignalListener                      capabilityListener;
     SP<CEventLoopTimer>                      maintenanceTimer;
     std::function<void(SRealmCaptureResult)> captureResultCallback;
+    std::function<void(SRealmInputResult)>   inputResultCallback;
     uint64_t                                 nextCaptureID = 1;
     bool                                     shuttingDown  = false;
 };
@@ -861,6 +954,10 @@ std::expected<uint64_t, SRealmInputError> CRealmInputControllerManager::requestC
 
 void CRealmInputControllerManager::setCaptureResultCallback(std::function<void(SRealmCaptureResult)> callback) {
     m_impl->captureResultCallback = std::move(callback);
+}
+
+void CRealmInputControllerManager::setInputResultCallback(std::function<void(SRealmInputResult)> callback) {
+    m_impl->inputResultCallback = std::move(callback);
 }
 
 bool CRealmInputControllerManager::controllerReady(uint64_t realmID) const {

@@ -2933,7 +2933,7 @@ void IHyprRenderer::ensureCursorRenderingMode() {
     m_cursorHiddenByCondition =
         m_cursorHiddenConditions.hiddenOnTimeout || m_cursorHiddenConditions.hiddenOnTouch || m_cursorHiddenConditions.hiddenOnTablet || m_cursorHiddenConditions.hiddenOnKeyboard;
 
-    const bool HIDE = m_cursorHiddenByCondition || (*PINVISIBLE != 0) || PROTO::inputCapture->isCaptured();
+    const bool HIDE = m_cursorHiddenByCondition || m_cursorHiddenByPolicy || (*PINVISIBLE != 0) || PROTO::inputCapture->isCaptured();
 
     if (HIDE == m_cursorHidden)
         return;
@@ -2971,6 +2971,14 @@ void IHyprRenderer::setCursorHidden(bool hide) {
         setCursorFromName(m_lastCursorData.name, true);
     else
         setCursorFromName("left_ptr", true);
+}
+
+void IHyprRenderer::setCursorHiddenByPolicy(bool hide) {
+    if (hide == m_cursorHiddenByPolicy)
+        return;
+
+    m_cursorHiddenByPolicy = hide;
+    ensureCursorRenderingMode();
 }
 
 bool IHyprRenderer::shouldRenderCursor() {

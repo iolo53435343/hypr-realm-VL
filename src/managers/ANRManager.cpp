@@ -67,6 +67,12 @@ void CANRManager::onTick() {
     }
 
     for (auto& data : m_data) {
+        if (data->suppressed) {
+            data->missedResponses = 0;
+            data->dialogSaidWait  = false;
+            continue;
+        }
+
         PHLWINDOW firstWindow;
         int       count = 0;
         for (const auto& w : Desktop::windowState()->windows()) {
@@ -136,6 +142,21 @@ void CANRManager::onResponse(SP<CANRManager::SANRData> data) {
         data->killDialog();
 }
 
+void CANRManager::setSuppressed(PHLWINDOW window, bool suppressed) {
+    const auto data = dataFor(window);
+    if (!data)
+        return;
+
+    data->suppressed = suppressed;
+    if (!suppressed)
+        return;
+
+    data->missedResponses = 0;
+    data->dialogSaidWait  = false;
+    if (data->isRunning())
+        data->killDialog();
+}
+
 bool CANRManager::isNotResponding(PHLWINDOW pWindow) {
     const auto DATA = dataFor(pWindow);
 
@@ -147,7 +168,7 @@ bool CANRManager::isNotResponding(PHLWINDOW pWindow) {
 
 bool CANRManager::isNotResponding(SP<CANRManager::SANRData> data) {
     static auto PANRTHRESHOLD = CConfigValue<Config::INTEGER>("misc:anr_missed_pings");
-    return data->missedResponses > *PANRTHRESHOLD;
+    return !data->suppressed && data->missedResponses > *PANRTHRESHOLD;
 }
 
 SP<CANRManager::SANRData> CANRManager::dataFor(PHLWINDOW pWindow) {

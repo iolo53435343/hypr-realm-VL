@@ -45,6 +45,7 @@ static const char* messageName(eRealmInputMessageType type) {
         case eRealmInputMessageType::CAPTURE_CANCEL: return "CAPTURE_CANCEL";
         case eRealmInputMessageType::POINTER_CLICK: return "POINTER_CLICK";
         case eRealmInputMessageType::KEYBOARD_PRESS: return "KEYBOARD_PRESS";
+        case eRealmInputMessageType::INPUT_APPLIED: return "INPUT_APPLIED";
     }
     return "UNKNOWN";
 }
@@ -135,8 +136,13 @@ int main(int argc, char** argv) {
         if (!message)
             return 5;
         std::cout << messageName(message->type) << ' ' << message->sequence << '\n' << std::flush;
+        if (realmInputMessageIsInputCommand(message->type)) {
+            auto applied = encodeRealmInputMessage(SRealmInputMessage{.type = eRealmInputMessageType::INPUT_APPLIED, .sequence = message->sequence});
+            if (!applied || send(controlFD, applied->data(), applied->size(), MSG_NOSIGNAL) != static_cast<ssize_t>(applied->size()))
+                return 6;
+        }
         if ((message->type == eRealmInputMessageType::CAPTURE || message->type == eRealmInputMessageType::CAPTURE_REGION) && !sendCapture(controlFD, message->sequence))
-            return 6;
+            return 7;
     }
 
     close(waylandFD);

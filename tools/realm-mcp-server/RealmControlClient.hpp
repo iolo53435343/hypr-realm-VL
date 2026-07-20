@@ -58,6 +58,7 @@ namespace Realm::MCP {
         };
 
         std::expected<std::string, std::string>    request(std::string_view method, std::string_view extraParameters = {});
+        std::expected<std::string, std::string>    input(std::string_view method, std::string_view extraParameters);
         std::expected<SControlPacket, std::string> readPacket();
         std::expected<void, std::string>           readExact(void* data, size_t size, Hyprutils::OS::CFileDescriptor& descriptor);
         std::expected<void, std::string>           writeAll(std::string_view data);

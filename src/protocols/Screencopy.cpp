@@ -5,6 +5,7 @@
 #include "types/Buffer.hpp"
 #include "../helpers/Format.hpp"
 #include "../helpers/time/Time.hpp"
+#include "../output/Monitor.hpp"
 #include <hyprgraphics/egl/Egl.hpp>
 
 using namespace Hyprgraphics::Egl;
@@ -124,8 +125,10 @@ void CScreencopyFrame::shareFrame(CZwlrScreencopyFrameV1* pFrame, wl_resource* b
 
     const auto& PBUFFER = PBUFFERRES->m_buffer.lock();
 
-    if (!withDamage)
+    if (!withDamage) {
         g_pHyprRenderer->damageMonitor(m_session->monitor());
+        m_session->monitor()->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+    }
 
     auto error = m_frame->share(PBUFFER, {}, [this, withDamage, self = m_self](eScreenshareResult result) {
         if (self.expired() || !good())

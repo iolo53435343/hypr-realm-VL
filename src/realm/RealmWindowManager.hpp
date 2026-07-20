@@ -4,10 +4,13 @@
 
 #include <cstdint>
 #include <expected>
+#include <hyprutils/math/Vector2D.hpp>
 #include <optional>
 #include <string>
 
 namespace Realm {
+    enum class eRealmDecorationAction : uint8_t;
+
     struct SRealmWindowManagerOptions {
         bool integrateWithEventBus = true;
     };
@@ -30,6 +33,9 @@ namespace Realm {
 
         void           updateWindowInputOwner(const SP<CRealm>& realm);
         void           updateWindowDecoration(const SP<CRealm>& realm);
+        void           updateWindowANRSuppression(const SP<CRealm>& realm);
+        void           updateHostCursorVisibility(const Hyprutils::Math::Vector2D& position);
+        void           handleDecorationAction(uint64_t realmID, eRealmDecorationAction action);
 
         CRealmManager& m_manager;
         UP<SImpl>      m_impl;

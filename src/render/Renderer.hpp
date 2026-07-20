@@ -84,6 +84,7 @@ namespace Render {
         void                                ensureCursorRenderingMode();
         bool                                shouldRenderCursor();
         void                                setCursorHidden(bool hide);
+        void                                setCursorHiddenByPolicy(bool hide);
 
         std::tuple<float, float, float>     getRenderTimes(PHLMONITOR pMonitor); // avg max min
         void                                ensureLockTexturesRendered(bool load);
@@ -287,6 +288,7 @@ namespace Render {
 
         bool                              m_cursorHidden            = false;
         bool                              m_cursorHiddenByCondition = false;
+        bool                              m_cursorHiddenByPolicy    = false;
         bool                              m_cursorHasSurface        = false;
         SP<Aquamarine::IBuffer>           m_currentBuffer           = nullptr;
         eRenderMode                       m_renderMode              = RENDER_MODE_NORMAL;

@@ -7,7 +7,7 @@
 using namespace Realm;
 
 static constexpr uint32_t REALM_INPUT_PROTOCOL_MAGIC   = 0x48524149;
-static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 2;
+static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 3;
 static constexpr size_t   REALM_INPUT_HEADER_SIZE      = 16;
 static constexpr size_t   REALM_INPUT_MAX_PACKET_SIZE  = REALM_INPUT_HEADER_SIZE + REALM_INPUT_MAX_TEXT_SIZE;
 
@@ -55,7 +55,8 @@ static bool isKnownType(eRealmInputMessageType type) {
         case eRealmInputMessageType::CAPTURE_READY:
         case eRealmInputMessageType::CAPTURE_CANCEL:
         case eRealmInputMessageType::POINTER_CLICK:
-        case eRealmInputMessageType::KEYBOARD_PRESS: return true;
+        case eRealmInputMessageType::KEYBOARD_PRESS:
+        case eRealmInputMessageType::INPUT_APPLIED: return true;
     }
 
     return false;
@@ -68,7 +69,8 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
         case eRealmInputMessageType::READY:
         case eRealmInputMessageType::RELEASE_ALL:
         case eRealmInputMessageType::CAPTURE:
-        case eRealmInputMessageType::CAPTURE_CANCEL: break;
+        case eRealmInputMessageType::CAPTURE_CANCEL:
+        case eRealmInputMessageType::INPUT_APPLIED: break;
         case eRealmInputMessageType::ERROR:
         case eRealmInputMessageType::KEYBOARD_TYPE: {
             if (message.text.size() > REALM_INPUT_MAX_TEXT_SIZE)
@@ -176,6 +178,7 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
         case eRealmInputMessageType::RELEASE_ALL:
         case eRealmInputMessageType::CAPTURE:
         case eRealmInputMessageType::CAPTURE_CANCEL:
+        case eRealmInputMessageType::INPUT_APPLIED:
             if (payloadSize != 0)
                 return std::unexpected("realm input message must not contain a payload");
             break;

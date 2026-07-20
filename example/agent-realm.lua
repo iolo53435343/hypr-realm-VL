@@ -45,6 +45,14 @@ hl.config({
         enabled = false,
     },
 
+    -- Nested outputs render their cursor into the realm window. This keeps
+    -- human takeover and agent pointer motion visible to the host operator.
+    cursor = {
+        no_hardware_cursors = 1,
+        inactive_timeout = 0,
+        invisible = false,
+    },
+
     xwayland = {
         enabled = false,
     },

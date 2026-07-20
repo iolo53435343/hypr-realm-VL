@@ -63,6 +63,14 @@
 
 using namespace Hyprutils::String;
 
+static bool realmCursorVisibilityForced() {
+    static const bool FORCED = [] {
+        const auto* realmID = getenv("HYPRLAND_REALM_ID");
+        return realmID && *realmID;
+    }();
+    return FORCED;
+}
+
 CInputManager::CInputManager() {
     m_listeners.setCursorShape = PROTO::cursorShape->m_events.setShape.listen([this](const CCursorShapeProtocol::SSetShapeEvent& event) {
         if (!g_pSeatManager->m_state.pointerFocusResource)
@@ -790,6 +798,18 @@ void CInputManager::onMouseButton(IPointer::SButtonEvent e, SP<IPointer> mouse) 
 
 void CInputManager::processMouseRequest(const CSeatManager::SSetCursorEvent& event) {
     Log::logger->log(Log::DEBUG, "cursorImage request: surface {:x}", rc<uintptr_t>(event.surf.get()));
+
+    if (!event.surf && realmCursorVisibilityForced()) {
+        m_cursorSurfaceInfo.wlSurface->unassign();
+        m_cursorSurfaceInfo.vHotspot = {};
+        m_cursorSurfaceInfo.hidden   = false;
+        if (m_cursorSurfaceInfo.name.empty())
+            m_cursorSurfaceInfo.name = "left_ptr";
+
+        if (cursorImageUnlocked())
+            g_pHyprRenderer->setCursorFromName(m_cursorSurfaceInfo.name);
+        return;
+    }
 
     if (event.surf != m_cursorSurfaceInfo.wlSurface->resource()) {
         m_cursorSurfaceInfo.wlSurface->unassign();

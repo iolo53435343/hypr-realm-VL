@@ -324,6 +324,11 @@ hl.config({
         blur = { enabled = false },
     },
     animations = { enabled = false },
+    cursor = {
+        no_hardware_cursors = 1,
+        inactive_timeout = 0,
+        invisible = false,
+    },
     xwayland = {
         enabled = false,
     },

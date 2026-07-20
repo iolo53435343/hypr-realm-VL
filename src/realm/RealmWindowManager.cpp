@@ -3,9 +3,13 @@
 #include "RealmDecoration.hpp"
 #include "../debug/log/Logger.hpp"
 #include "../desktop/state/FocusState.hpp"
+#include "../desktop/state/ViewState.hpp"
 #include "../desktop/view/Window.hpp"
 #include "../event/EventBus.hpp"
 #include "../helpers/MiscFunctions.hpp"
+#include "../managers/ANRManager.hpp"
+#include "../pointer/PointerManager.hpp"
+#include "../render/Renderer.hpp"
 
 #include <format>
 #include <map>
@@ -23,9 +27,13 @@ struct CRealmWindowManager::SImpl {
     CHyprSignalListener                        lifecycleListener;
     CHyprSignalListener                        inputOwnerListener;
     CHyprSignalListener                        capabilityListener;
+    CHyprSignalListener                        mouseMoveListener;
+    CHyprSignalListener                        mouseButtonListener;
+    bool                                       integratesWithEventBus = false;
 };
 
 CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowManagerOptions options) : m_manager(manager), m_impl(makeUnique<SImpl>()) {
+    m_impl->integratesWithEventBus = options.integrateWithEventBus;
     if (!options.integrateWithEventBus)
         return;
 
@@ -45,11 +53,14 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
             return;
         }
 
-        m_impl->windows[window->m_stableID]     = window;
-        auto decoration                         = makeUnique<CRealmDecoration>(window, *associated);
+        m_impl->windows[window->m_stableID] = window;
+        auto decoration =
+            makeUnique<CRealmDecoration>(window, *associated, [this, realmID = (*associated)->id()](eRealmDecorationAction action) { handleDecorationAction(realmID, action); });
         m_impl->decorations[window->m_stableID] = decoration.get();
         window->addWindowDeco(std::move(decoration));
         updateWindowInputOwner(*associated);
+        updateWindowANRSuppression(*associated);
+        updateHostCursorVisibility(Pointer::mgr()->position());
     });
 
     m_impl->windowCloseListener = Event::bus()->m_events.window.close.listen([this](PHLWINDOW window) {
@@ -78,6 +89,8 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         if (!event.realm)
             return;
 
+        updateWindowANRSuppression(event.realm);
+
         const auto windowID = windowForRealm(event.realm->id());
         if (!windowID)
             return;
@@ -98,11 +111,36 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         m_impl->windows.erase(*windowID);
     });
 
-    m_impl->inputOwnerListener = m_manager.m_events.inputOwner.listen([this](const SRealmInputOwnerEvent& event) { updateWindowInputOwner(event.realm); });
-    m_impl->capabilityListener = m_manager.m_events.capability.listen([this](const SRealmCapabilityEvent& event) { updateWindowDecoration(event.realm); });
+    m_impl->inputOwnerListener  = m_manager.m_events.inputOwner.listen([this](const SRealmInputOwnerEvent& event) { updateWindowInputOwner(event.realm); });
+    m_impl->capabilityListener  = m_manager.m_events.capability.listen([this](const SRealmCapabilityEvent& event) { updateWindowDecoration(event.realm); });
+    m_impl->mouseMoveListener   = Event::bus()->m_events.input.mouse.move.listen([this](const Vector2D& position, Event::SCallbackInfo&) { updateHostCursorVisibility(position); });
+    m_impl->mouseButtonListener = Event::bus()->m_events.input.mouse.button.listen([this](const IPointer::SButtonEvent& event, Event::SCallbackInfo& info) {
+        if (info.cancelled)
+            return;
+
+        const auto position = Pointer::mgr()->position();
+        const auto window   = Desktop::viewState()->hitTest().windowAt(
+            position, Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_INPUT_BLOCKED);
+        if (!window)
+            return;
+
+        const auto realm = realmForWindow(window->m_stableID);
+        if (!realm)
+            return;
+        if (window->checkInputOnDecos(INPUT_TYPE_BUTTON, position, event)) {
+            info.cancelled = true;
+            return;
+        }
+
+        if (realm->inputOwner() != eRealmInputOwner::HUMAN && window->getWindowBoxUnified(Desktop::View::RESERVED_EXTENTS).containsPoint(position))
+            info.cancelled = true;
+    });
 }
 
-CRealmWindowManager::~CRealmWindowManager() = default;
+CRealmWindowManager::~CRealmWindowManager() {
+    if (m_impl->integratesWithEventBus && g_pHyprRenderer)
+        g_pHyprRenderer->setCursorHiddenByPolicy(false);
+}
 
 std::expected<SP<CRealm>, std::string> CRealmWindowManager::associateWindow(uint64_t windowID, pid_t clientPID) {
     if (windowID == 0)
@@ -133,11 +171,16 @@ void CRealmWindowManager::dissociateWindow(uint64_t windowID) {
 
     const auto windowIterator = m_impl->windows.find(windowID);
     const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
-    if (window)
+    if (window) {
         window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, false);
+        if (g_pANRManager)
+            g_pANRManager->setSuppressed(window, false);
+    }
 
     m_impl->realmToWindow.erase(associated->second);
     m_impl->windowToRealm.erase(associated);
+    if (m_impl->integratesWithEventBus)
+        updateHostCursorVisibility(Pointer::mgr()->position());
 }
 
 SP<CRealm> CRealmWindowManager::realmForWindow(uint64_t windowID) const {
@@ -192,6 +235,30 @@ void CRealmWindowManager::updateWindowDecoration(const SP<CRealm>& realm) {
         window->updateWindowDecos();
 }
 
+void CRealmWindowManager::updateWindowANRSuppression(const SP<CRealm>& realm) {
+    if (!realm || !g_pANRManager)
+        return;
+
+    const auto windowID = windowForRealm(realm->id());
+    if (!windowID)
+        return;
+
+    const auto windowIterator = m_impl->windows.find(*windowID);
+    const auto window         = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        g_pANRManager->setSuppressed(window, realm->state() == eRealmState::PAUSED);
+}
+
+void CRealmWindowManager::updateHostCursorVisibility(const Vector2D& position) {
+    if (!m_impl->integratesWithEventBus || !g_pHyprRenderer)
+        return;
+
+    const auto window = Desktop::viewState()->hitTest().windowAt(
+        position, Desktop::View::ALLOW_FLOATING | Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_INPUT_BLOCKED);
+    const bool hide = window && realmForWindow(window->m_stableID) && window->getWindowMainSurfaceBox().containsPoint(position);
+    g_pHyprRenderer->setCursorHiddenByPolicy(hide);
+}
+
 std::expected<void, std::string> CRealmWindowManager::takeoverRealm(uint64_t realmID) {
     const auto realm = m_manager.realmByID(realmID);
     if (!realm)
@@ -228,6 +295,20 @@ std::expected<void, std::string> CRealmWindowManager::releaseRealm(uint64_t real
     if (!result && window && realm->inputOwner() == eRealmInputOwner::HUMAN)
         window->setInputBlocked(Desktop::View::INPUT_BLOCK_REALM_AGENT, false);
     return result;
+}
+
+void CRealmWindowManager::handleDecorationAction(uint64_t realmID, eRealmDecorationAction action) {
+    std::expected<void, std::string> result = std::unexpected("unsupported realm decoration action");
+    switch (action) {
+        case eRealmDecorationAction::TAKEOVER: result = takeoverRealm(realmID); break;
+        case eRealmDecorationAction::RELEASE: result = releaseRealm(realmID); break;
+        case eRealmDecorationAction::PAUSE: result = m_manager.pauseRealm(realmID); break;
+        case eRealmDecorationAction::RESUME: result = m_manager.resumeRealm(realmID); break;
+        case eRealmDecorationAction::STOP: result = m_manager.stopRealm(realmID); break;
+    }
+
+    if (!result && Log::logger)
+        Log::logger->log(Log::ERR, "Failed applying realm bar action for realm {}: {}", realmID, result.error());
 }
 
 std::string Realm::realmWindowJSON(const SP<CRealm>& realm) {

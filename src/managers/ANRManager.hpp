@@ -19,6 +19,7 @@ class CANRManager {
 
     void onResponse(SP<CXDGWMBase> wmBase);
     void onResponse(SP<CXWaylandSurface> xwaylandSurface);
+    void setSuppressed(PHLWINDOW window, bool suppressed);
     bool isNotResponding(PHLWINDOW pWindow);
 
   private:
@@ -36,6 +37,7 @@ class CANRManager {
 
         int                  missedResponses = 0;
 
+        bool                 suppressed     = false;
         bool                 dialogSaidWait = false;
         SP<CAsyncDialogBox>  dialogBox;
 

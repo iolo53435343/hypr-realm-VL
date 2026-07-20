@@ -40,6 +40,10 @@ struct SQueuedCapture {
     std::optional<uint64_t> capture_id;
 };
 
+struct SQueuedInput {
+    std::optional<uint32_t> sequence;
+};
+
 struct SControlCaptureFrame {
     std::optional<std::string> transport;
     std::optional<uint32_t>    fd_count;
@@ -54,6 +58,7 @@ struct SControlCaptureFrame {
 struct SControlEvent {
     std::optional<std::string>          event;
     std::optional<uint64_t>             capture_id;
+    std::optional<uint32_t>             sequence;
     std::optional<uint64_t>             realm_id;
     std::optional<SControlCaptureFrame> frame;
     std::optional<std::string>          error;
@@ -296,6 +301,34 @@ std::expected<std::string, std::string> CRealmControlClient::realmInfo() {
     return request("realm.info");
 }
 
+std::expected<std::string, std::string> CRealmControlClient::input(std::string_view method, std::string_view extraParameters) {
+    auto queued = request(method, extraParameters);
+    if (!queued)
+        return std::unexpected(queued.error());
+
+    SQueuedInput queuedInput;
+    if (const auto error = glz::read<SRelaxedJSONOptions{}>(queuedInput, *queued); error || !queuedInput.sequence)
+        return std::unexpected("realm control input response is missing its sequence");
+
+    for (size_t ignoredEvents = 0; ignoredEvents < 64; ++ignoredEvents) {
+        auto packet = readPacket();
+        if (!packet)
+            return std::unexpected(packet.error());
+        if (packet->descriptor.isValid())
+            return std::unexpected("realm control input event unexpectedly included a file descriptor");
+
+        SControlEvent event;
+        if (const auto error = glz::read<SRelaxedJSONOptions{}>(event, packet->json); error || !event.sequence || *event.sequence != *queuedInput.sequence)
+            continue;
+        if (event.event == "realm.input.failed")
+            return std::unexpected(event.error.value_or("realm input failed"));
+        if (event.event != "realm.input.applied")
+            return std::unexpected("realm control input event is incomplete");
+        return queued;
+    }
+    return std::unexpected("too many unmatched realm control events while waiting for input completion");
+}
+
 std::expected<std::string, std::string> CRealmControlClient::createRealm() {
     return request("realm.create");
 }
@@ -396,23 +429,23 @@ std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::opti
 }
 
 std::expected<std::string, std::string> CRealmControlClient::movePointer(uint32_t x, uint32_t y) {
-    return request("pointer.move", std::format(R"("x":{},"y":{})", x, y));
+    return input("pointer.move", std::format(R"("x":{},"y":{})", x, y));
 }
 
 std::expected<std::string, std::string> CRealmControlClient::clickPointer(std::string_view button) {
-    return request("pointer.click", std::format(R"("button":{})", quoteJSON(button)));
+    return input("pointer.click", std::format(R"("button":{})", quoteJSON(button)));
 }
 
 std::expected<std::string, std::string> CRealmControlClient::scrollPointer(std::string_view axis, int32_t steps) {
-    return request("pointer.scroll", std::format(R"("axis":{},"steps":{})", quoteJSON(axis), steps));
+    return input("pointer.scroll", std::format(R"("axis":{},"steps":{})", quoteJSON(axis), steps));
 }
 
 std::expected<std::string, std::string> CRealmControlClient::pressKey(uint32_t keycode) {
-    return request("keyboard.press", std::format(R"("keycode":{})", keycode));
+    return input("keyboard.press", std::format(R"("keycode":{})", keycode));
 }
 
 std::expected<std::string, std::string> CRealmControlClient::typeText(std::string_view text) {
-    return request("keyboard.type", std::format(R"("text":{})", quoteJSON(text)));
+    return input("keyboard.type", std::format(R"("text":{})", quoteJSON(text)));
 }
 
 const std::string& CRealmControlClient::realm() const {

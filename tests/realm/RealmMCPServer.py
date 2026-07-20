@@ -147,6 +147,37 @@ class FakeRealmControlServer:
                             os.close(descriptor)
                         continue
 
+                    if method in (
+                        "pointer.move",
+                        "pointer.click",
+                        "pointer.scroll",
+                        "keyboard.press",
+                        "keyboard.type",
+                    ):
+                        connection.sendall(
+                            self._frame(
+                                {
+                                    "request_id": request_id,
+                                    "ok": True,
+                                    "result": {
+                                        "action": "queued",
+                                        "sequence": len(self.requests),
+                                        "realm": {"name": "codex"},
+                                    },
+                                }
+                            )
+                        )
+                        connection.sendall(
+                            self._frame(
+                                {
+                                    "event": "realm.input.applied",
+                                    "sequence": len(self.requests),
+                                    "realm_id": 7,
+                                }
+                            )
+                        )
+                        continue
+
                     connection.sendall(
                         self._frame(
                             {
@@ -271,13 +302,24 @@ class RealmMCPServerTest(unittest.TestCase):
         image = captured["content"][0]
         self.assertEqual(image["type"], "image")
         self.assertEqual(image["mimeType"], "image/png")
-        self.assertTrue(base64.b64decode(image["data"]).startswith(b"\x89PNG\r\n\x1a\n"))
+        png = base64.b64decode(image["data"])
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertEqual(struct.unpack(">II", png[16:24]), (1280, 720))
+        self.assertEqual(captured["structuredContent"]["source_width"], 2)
+        self.assertEqual(captured["structuredContent"]["source_height"], 2)
+
+        region = self.tool("capture_realm", {"x": 10, "y": 20, "width": 100, "height": 80}, 11)
+        self.assertFalse(region["isError"])
+        region_png = base64.b64decode(region["content"][0]["data"])
+        self.assertEqual(struct.unpack(">II", region_png[16:24]), (100, 80))
 
         self.assertTrue(self.control.requests)
         self.assertTrue(all(request["params"]["realm"] == "codex" for request in self.control.requests))
         methods = [request["method"] for request in self.control.requests]
         self.assertEqual(methods.count("pointer.click"), 1)
         self.assertEqual(methods.count("keyboard.press"), 1)
+        self.assertEqual(methods.count("realm.capture"), 2)
+        self.assertNotIn("realm.capture_region", methods)
 
 
 class RealmMCPServerSocketSafetyTest(unittest.TestCase):

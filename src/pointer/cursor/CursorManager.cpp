@@ -7,6 +7,9 @@
 #include "../../event/EventBus.hpp"
 #include "../../state/MonitorState.hpp"
 
+#include <algorithm>
+#include <cstring>
+
 using namespace Pointer;
 using namespace Pointer::Cursor;
 
@@ -28,16 +31,59 @@ static void hcLogger(enum eHyprcursorLogLevel level, char* message) {
     Log::logger->log(Log::DEBUG, "[hc] {}", message);
 }
 
+static bool realmCursorStyleEnabled() {
+    static const bool ENABLED = [] {
+        const auto* realmID = getenv("HYPRLAND_REALM_ID");
+        return realmID && *realmID;
+    }();
+    return ENABLED;
+}
+
+static uint8_t realmCursorChannel(uint8_t dark, uint8_t bright, uint8_t luminance, uint8_t alpha) {
+    const auto color = (sc<uint32_t>(dark) * (255U - luminance) + sc<uint32_t>(bright) * luminance) / 255U;
+    return sc<uint8_t>((color * alpha) / 255U);
+}
+
+static void styleRealmCursor(std::vector<uint8_t>& data, size_t stride, const Vector2D& size) {
+    if (!realmCursorStyleEnabled())
+        return;
+
+    for (int y = 0; y < sc<int>(size.y); ++y) {
+        for (int x = 0; x < sc<int>(size.x); ++x) {
+            const auto offset = sc<size_t>(y) * stride + sc<size_t>(x) * sizeof(uint32_t);
+            uint32_t   pixel  = 0;
+            std::memcpy(&pixel, data.data() + offset, sizeof(pixel));
+
+            const auto alpha = sc<uint8_t>(pixel >> 24U);
+            if (alpha == 0)
+                continue;
+
+            const auto     red               = sc<uint8_t>(pixel >> 16U);
+            const auto     green             = sc<uint8_t>(pixel >> 8U);
+            const auto     blue              = sc<uint8_t>(pixel);
+            const auto     premultipliedLuma = std::max({red, green, blue});
+            const auto     luminance         = sc<uint8_t>(std::min(255U, sc<uint32_t>(premultipliedLuma) * 255U / alpha));
+            const auto     styledRed         = realmCursorChannel(74, 255, luminance, alpha);
+            const auto     styledGreen       = realmCursorChannel(5, 72, luminance, alpha);
+            const auto     styledBlue        = realmCursorChannel(104, 212, luminance, alpha);
+            const uint32_t styledPixel       = (sc<uint32_t>(alpha) << 24U) | (sc<uint32_t>(styledRed) << 16U) | (sc<uint32_t>(styledGreen) << 8U) | styledBlue;
+            std::memcpy(data.data() + offset, &styledPixel, sizeof(styledPixel));
+        }
+    }
+}
+
 CCursorBuffer::CCursorBuffer(cairo_surface_t* surf, const Vector2D& size_, const Vector2D& hot_) : m_hotspot(hot_), m_stride(cairo_image_surface_get_stride(surf)) {
     size = size_;
 
     m_data = std::vector<uint8_t>(cairo_image_surface_get_data(surf), cairo_image_surface_get_data(surf) + (cairo_image_surface_get_height(surf) * m_stride));
+    styleRealmCursor(m_data, m_stride, size);
 }
 
 CCursorBuffer::CCursorBuffer(const uint8_t* pixelData, const Vector2D& size_, const Vector2D& hot_) : m_hotspot(hot_), m_stride(4 * size_.x) {
     size = size_;
 
     m_data = std::vector<uint8_t>(pixelData, pixelData + (sc<int>(size_.y) * m_stride));
+    styleRealmCursor(m_data, m_stride, size);
 }
 
 Aquamarine::eBufferCapability CCursorBuffer::caps() {

@@ -71,6 +71,7 @@ namespace Desktop::View {
         SKIP_FULLSCREEN_PRIORITY = 1 << 6,
         FOCUS_PRIORITY           = 1 << 7,
         FOLLOW_MOUSE_CHECK       = 1 << 8,
+        ALLOW_INPUT_BLOCKED      = 1 << 9,
     };
 
     enum eSuppressEvents : uint8_t {
