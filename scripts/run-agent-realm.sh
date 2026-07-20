@@ -141,7 +141,7 @@ launch_realm() {
     local status=0
 
     set +e
-    setsid --wait env \
+    env \
         XDG_RUNTIME_DIR="${realm_runtime}" \
         XDG_CACHE_HOME="${realm_runtime}/cache" \
         XDG_STATE_HOME="${realm_runtime}/state" \
@@ -152,6 +152,7 @@ launch_realm() {
         HYPRLAND_REALM_ENV_GUARD_LOG="${realm_runtime}/environment-guard.log" \
         HYPRLAND_NO_RT=1 \
         HYPRLAND_NO_SD_VARS=1 \
+        setsid --wait \
         "${hyprland_binary}" --config "${realm_config}" >"${realm_log}" 2>&1
     status=$?
     set -e
