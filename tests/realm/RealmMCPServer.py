@@ -17,7 +17,7 @@ import unittest
 
 class FakeRealmControlServer:
     def __init__(self, root: pathlib.Path):
-        self.path = root / ".realm-control.sock"
+        self.path = root / ".realm.sock"
         self.requests = []
         self.error = None
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -280,11 +280,37 @@ class RealmMCPServerTest(unittest.TestCase):
 
 
 class RealmMCPServerSocketSafetyTest(unittest.TestCase):
+    def test_discovers_short_control_socket_name(self):
+        with tempfile.TemporaryDirectory(prefix="realm-mcp-discovery.") as temporary_directory:
+            root = pathlib.Path(temporary_directory)
+            signature = "test-instance"
+            instance = root / "hypr" / signature
+            instance.mkdir(parents=True, mode=0o700)
+            control = FakeRealmControlServer(instance)
+            environment = os.environ.copy()
+            environment["XDG_RUNTIME_DIR"] = str(root)
+            environment["HYPRLAND_INSTANCE_SIGNATURE"] = signature
+            try:
+                result = subprocess.run(
+                    [sys.argv[1], "--realm", "codex"],
+                    input="",
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                    check=False,
+                    env=environment,
+                )
+            finally:
+                control.close()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(control.path.name, ".realm.sock")
+
     def test_rejects_insecure_control_socket_permissions(self):
         with tempfile.TemporaryDirectory(prefix="realm-mcp-insecure.") as temporary_directory:
             root = pathlib.Path(temporary_directory)
             os.chmod(root, 0o700)
-            socket_path = root / ".realm-control.sock"
+            socket_path = root / ".realm.sock"
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 listener.bind(str(socket_path))

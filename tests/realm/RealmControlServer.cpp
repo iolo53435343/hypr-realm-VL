@@ -1,4 +1,5 @@
 #include <realm/RealmControlServer.hpp>
+#include <realm/RealmControlProtocol.hpp>
 #include <realm/RealmInputController.hpp>
 #include <realm/RealmManager.hpp>
 #include <realm/RealmWindowManager.hpp>
@@ -122,7 +123,7 @@ class CRealmControlServerTest : public testing::Test {
 
     void startServer(SRealmControlServerOptions options = {}) {
         if (options.socketPath.empty())
-            options.socketPath = m_root / ".realm-control.sock";
+            options.socketPath = m_root / REALM_CONTROL_SOCKET_NAME;
         options.integrateWithEventLoop = false;
         m_server                       = makeUnique<CRealmControlServer>(*m_manager, *m_windowManager, *m_inputController, std::move(options));
         ASSERT_TRUE(m_server->isListening()) << m_server->lastError();
@@ -581,7 +582,7 @@ TEST_F(CRealmControlServerTest, rejectsPeersWhoseCredentialsDoNotMatch) {
 
     m_server.reset();
     startServer(SRealmControlServerOptions{
-        .socketPath      = m_root / ".realm-control.sock",
+        .socketPath      = m_root / REALM_CONTROL_SOCKET_NAME,
         .expectedPeerUID = geteuid() + 1,
     });
     auto client = connectClient();

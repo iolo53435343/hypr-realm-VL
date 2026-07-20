@@ -324,6 +324,9 @@ hl.config({
         blur = { enabled = false },
     },
     animations = { enabled = false },
+    xwayland = {
+        enabled = false,
+    },
     misc = {
         background_color = "rgba(17111fff)",
         disable_hyprland_logo = true,

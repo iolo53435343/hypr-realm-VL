@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <sys/wait.h>
 #include <thread>
@@ -142,6 +143,11 @@ TEST_F(CRealmManagerTest, startsPausesResumesStopsAndDestroysRealm) {
     EXPECT_TRUE(std::filesystem::is_directory(realm->runtimeDirectory()));
     EXPECT_TRUE(std::filesystem::is_regular_file(realm->configPath()));
     EXPECT_EQ(std::filesystem::path(realm->runtimeDirectory()).parent_path(), m_root);
+
+    std::ifstream configStream(realm->configPath());
+    ASSERT_TRUE(configStream);
+    const std::string configContents{std::istreambuf_iterator<char>{configStream}, std::istreambuf_iterator<char>{}};
+    EXPECT_NE(configContents.find("xwayland = {\n        enabled = false,\n    },"), std::string::npos);
 
     const auto runtimePermissions = std::filesystem::status(realm->runtimeDirectory()).permissions();
     const auto privateMask        = std::filesystem::perms::group_all | std::filesystem::perms::others_all;

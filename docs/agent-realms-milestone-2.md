@@ -29,6 +29,11 @@ directories.
   paths never pass through a shell.
 - Every compositor receives a private runtime, cache, state, config, log, and
   Wayland socket namespace.
+- Generated realm configs explicitly disable XWayland. Wayland applications
+  remain supported inside a realm, while X11-only applications are excluded to
+  avoid a reproducible nested-XWayland teardown corruption in the current
+  fork/dependency combination. The host compositor's XWayland setting is not
+  modified.
 - Realm process groups isolate pause, resume, graceful termination, and forced
   termination from the host compositor and other realms.
 - A dedicated supervisor waits for the nested compositor and reports its exit

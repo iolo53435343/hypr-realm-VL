@@ -32,6 +32,10 @@ Baseline date: 2026-07-19
 - The realm config disables Hyprland's synthetic `FALLBACK` output. When the
   host closes the Wayland-backed output, the launcher owns shutdown and runtime
   cleanup instead of allowing a headless fallback output to start.
+- The development realm is Wayland-only. Nested XWayland is disabled because
+  the current fork/dependency combination corrupts allocator state while
+  tearing down a nested compositor. This does not change XWayland in the host
+  session.
 - Hyprland writes instance data below `$XDG_RUNTIME_DIR/hypr/<instance>/`. The
   launcher reads `hyprland.lock` to report the compositor PID and nested Wayland
   socket. Its temporary directory basename is intentionally short so the IPC

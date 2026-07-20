@@ -1,5 +1,6 @@
 #include "RealmControlServer.hpp"
 
+#include "RealmControlProtocol.hpp"
 #include "RealmIPC.hpp"
 #include "RealmInputController.hpp"
 #include "RealmManager.hpp"
@@ -846,7 +847,9 @@ struct CRealmControlServer::SImpl {
 
 CRealmControlServer::CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager) :
     CRealmControlServer(manager, windowManager,
-                        SRealmControlServerOptions{.socketPath = g_pCompositor ? std::filesystem::path{g_pCompositor->m_instancePath} / ".realm-control.sock" : ""}) {}
+                        SRealmControlServerOptions{
+                            .socketPath = g_pCompositor ? std::filesystem::path{g_pCompositor->m_instancePath} / REALM_CONTROL_SOCKET_NAME : std::filesystem::path{},
+                        }) {}
 
 CRealmControlServer::CRealmControlServer(CRealmManager& manager, CRealmWindowManager& windowManager, SRealmControlServerOptions options) :
     m_impl(makeUnique<SImpl>(manager, windowManager, inputControllerManager().get(), std::move(options))) {}

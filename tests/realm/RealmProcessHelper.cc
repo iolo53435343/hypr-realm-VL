@@ -21,6 +21,14 @@ static void                  stop(int) {
     RUNNING = 0;
 }
 
+static void waitForStop() {
+    sigset_t waitMask;
+    sigemptyset(&waitMask);
+
+    while (RUNNING)
+        sigsuspend(&waitMask);
+}
+
 int main() {
     const auto* runtime = getenv("XDG_RUNTIME_DIR");
     const auto* name    = getenv("HYPRLAND_REALM_NAME");
@@ -31,12 +39,18 @@ int main() {
     if (realmName == "startup-failure")
         return 23;
 
+    sigset_t terminationSignals;
+    sigemptyset(&terminationSignals);
+    sigaddset(&terminationSignals, SIGTERM);
+    sigaddset(&terminationSignals, SIGINT);
+    if (sigprocmask(SIG_BLOCK, &terminationSignals, nullptr) < 0)
+        return 8;
+
     signal(SIGTERM, realmName == "ignore-term" ? SIG_IGN : stop);
     signal(SIGINT, stop);
 
     if (realmName == "no-ready") {
-        while (RUNNING)
-            pause();
+        waitForStop();
         return 0;
     }
 
@@ -72,8 +86,7 @@ int main() {
         return 7;
     }
 
-    while (RUNNING)
-        pause();
+    waitForStop();
 
     close(socketFD);
     return 0;

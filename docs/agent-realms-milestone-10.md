@@ -24,7 +24,7 @@ socket can be supplied for development and isolated testing:
 
 ```text
 hyprland-realm-mcp-server --realm codex \
-  --socket /absolute/path/to/.realm-control.sock
+  --socket /absolute/path/to/.realm.sock
 ```
 
 Before connecting, it requires the path to be a Unix socket owned by the
@@ -99,6 +99,11 @@ For multiple agents, configure multiple MCP server entries with distinct
 names and distinct `--realm` values. Each agent receives only the server entry
 for its realm. The user continues working on the host desktop; the tools act
 through the nested realm controller rather than host input devices.
+
+Agent realms are currently Wayland-only: their generated config disables
+XWayland to avoid a reproducible nested-compositor teardown corruption. This
+does not alter the host session, but X11-only applications cannot be launched
+inside a realm.
 
 ## Security boundary
 

@@ -1,5 +1,6 @@
 #include "RealmControlClient.hpp"
 
+#include "../../src/realm/RealmControlProtocol.hpp"
 #include "../../src/realm/RealmInputProtocol.hpp"
 
 #include <algorithm>
@@ -104,7 +105,7 @@ std::expected<std::filesystem::path, std::string> CRealmControlClient::discoverS
         std::ranges::any_of(signatureView, [](unsigned char character) { return character < 0x21 || character == 0x7F; }))
         return std::unexpected("HYPRLAND_INSTANCE_SIGNATURE contains unsafe path characters");
 
-    return std::filesystem::path{runtime} / "hypr" / signatureView / ".realm-control.sock";
+    return std::filesystem::path{runtime} / "hypr" / signatureView / REALM_CONTROL_SOCKET_NAME;
 }
 
 std::expected<void, std::string> CRealmControlClient::connect() {

@@ -10,8 +10,11 @@ Each host compositor creates one control socket in its existing private
 instance runtime directory:
 
 ```text
-<Hyprland instance directory>/.realm-control.sock
+<Hyprland instance directory>/.realm.sock
 ```
+
+The basename is no longer than Hyprland's core `.socket.sock` basename, so the
+control socket fits the Unix-domain path limit whenever core IPC does.
 
 The instance directory must be owned by the compositor user and inaccessible
 to group and other users. The socket is set to mode `0600`. Every accepted
