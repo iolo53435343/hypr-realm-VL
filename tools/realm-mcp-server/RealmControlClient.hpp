@@ -44,12 +44,16 @@ namespace Realm::MCP {
         std::expected<std::string, std::string>                  denyObservation();
         std::expected<SCaptureFrame, std::string>                capture(std::optional<SCaptureRegion> region);
         std::expected<std::string, std::string>                  movePointer(uint32_t x, uint32_t y);
+        std::expected<std::string, std::string>                  pointAndClick(uint32_t x, uint32_t y, std::string_view button, uint32_t count);
         std::expected<std::string, std::string>                  clickPointer(std::string_view button);
         std::expected<std::string, std::string>                  scrollPointer(std::string_view axis, int32_t steps);
         std::expected<std::string, std::string>                  pressKey(uint32_t keycode);
+        std::expected<std::string, std::string>                  pressShortcut(const std::vector<uint32_t>& keycodes);
         std::expected<std::string, std::string>                  typeText(std::string_view text);
 
         const std::string&                                       realm() const;
+        uint32_t                                                 coordinateWidth() const;
+        uint32_t                                                 coordinateHeight() const;
 
       private:
         struct SControlPacket {
@@ -66,6 +70,8 @@ namespace Realm::MCP {
         std::filesystem::path                      m_socketPath;
         std::string                                m_realm;
         Hyprutils::OS::CFileDescriptor             m_socket;
-        uint64_t                                   m_nextRequestID = 1;
+        uint64_t                                   m_nextRequestID    = 1;
+        uint32_t                                   m_coordinateWidth  = 1280;
+        uint32_t                                   m_coordinateHeight = 720;
     };
 }

@@ -190,16 +190,16 @@ IHyprRenderer::IHyprRenderer() {
                 return;
 
             bool dirty = false;
-            for (auto& w : m_renderUnfocused) {
-                if (!w) {
+            for (auto& entry : m_renderUnfocused) {
+                if (!entry.window) {
                     dirty = true;
                     continue;
                 }
 
-                if (!w->wlSurface() || !w->wlSurface()->resource() || shouldRenderWindow(w.lock()))
+                if (!entry.window->wlSurface() || !entry.window->wlSurface()->resource() || shouldRenderWindow(entry.window.lock()))
                     continue;
 
-                w->wlSurface()->resource()->breadthfirst(
+                entry.window->wlSurface()->resource()->breadthfirst(
                     [](SP<CWLSurfaceResource> surf, const Vector2D& offset, void* data) {
                         surf->m_stateQueue.unlockFirst(LOCK_REASON_FENCE | LOCK_REASON_FIFO | LOCK_REASON_TIMER);
                         surf->presentFeedback(Time::steadyNow(), Desktop::focusState()->monitor(), true);
@@ -208,7 +208,7 @@ IHyprRenderer::IHyprRenderer() {
             }
 
             if (dirty)
-                std::erase_if(m_renderUnfocused, [](const auto& e) { return !e || !e->m_ruleApplicator->renderUnfocused().valueOr(false); });
+                std::erase_if(m_renderUnfocused, [](const auto& e) { return !e.window || (!e.internal && !e.window->m_ruleApplicator->renderUnfocused().valueOr(false)); });
 
             if (!m_renderUnfocused.empty())
                 m_renderUnfocusedTimer->updateTimeout(std::chrono::milliseconds(1000 / *PFPS));
@@ -3078,15 +3078,26 @@ bool IHyprRenderer::isMgpu() {
 }
 
 void IHyprRenderer::addWindowToRenderUnfocused(PHLWINDOW window) {
+    addWindowToRenderUnfocused(window, false);
+}
+
+void IHyprRenderer::addInternalWindowToRenderUnfocused(PHLWINDOW window) {
+    addWindowToRenderUnfocused(window, true);
+}
+
+void IHyprRenderer::addWindowToRenderUnfocused(PHLWINDOW window, bool internal) {
     static auto PFPS = CConfigValue<Config::INTEGER>("misc:render_unfocused_fps");
 
     if (*PFPS <= 0)
         return;
 
-    if (std::ranges::find(m_renderUnfocused, window) != m_renderUnfocused.end())
+    const auto existing = std::ranges::find_if(m_renderUnfocused, [&window](const auto& entry) { return entry.window == window; });
+    if (existing != m_renderUnfocused.end()) {
+        existing->internal = existing->internal || internal;
         return;
+    }
 
-    m_renderUnfocused.emplace_back(window);
+    m_renderUnfocused.emplace_back(SRenderUnfocusedWindow{.window = window, .internal = internal});
 
     if (!m_renderUnfocusedTimer->armed())
         m_renderUnfocusedTimer->updateTimeout(std::chrono::milliseconds(1000 / *PFPS));

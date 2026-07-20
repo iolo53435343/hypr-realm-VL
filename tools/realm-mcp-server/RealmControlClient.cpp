@@ -302,7 +302,8 @@ std::expected<std::string, std::string> CRealmControlClient::realmInfo() {
 }
 
 std::expected<std::string, std::string> CRealmControlClient::input(std::string_view method, std::string_view extraParameters) {
-    auto queued = request(method, extraParameters);
+    const auto started = std::chrono::steady_clock::now();
+    auto       queued  = request(method, extraParameters);
     if (!queued)
         return std::unexpected(queued.error());
 
@@ -324,7 +325,8 @@ std::expected<std::string, std::string> CRealmControlClient::input(std::string_v
             return std::unexpected(event.error.value_or("realm input failed"));
         if (event.event != "realm.input.applied")
             return std::unexpected("realm control input event is incomplete");
-        return queued;
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+        return std::format(R"({{"action":"applied","sequence":{},"elapsed_ms":{},"realm_name":{}}})", *queuedInput.sequence, elapsed, quoteJSON(m_realm));
     }
     return std::unexpected("too many unmatched realm control events while waiting for input completion");
 }
@@ -395,8 +397,10 @@ std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::opti
             return std::unexpected("realm control capture metadata is incomplete");
         if (*frame.format != REALM_CAPTURE_FORMAT_ARGB8888 && *frame.format != REALM_CAPTURE_FORMAT_XRGB8888)
             return std::unexpected("realm control capture has an unsupported pixel format");
-        if (*frame.width == 0 || *frame.height == 0 || *frame.width > REALM_INPUT_OUTPUT_WIDTH || *frame.height > REALM_INPUT_OUTPUT_HEIGHT || *frame.stride < *frame.width * 4ULL)
-            return std::unexpected("realm control capture dimensions are invalid");
+        if (*frame.width == 0 || *frame.height == 0 || *frame.width > REALM_CAPTURE_MAX_DIMENSION || *frame.height > REALM_CAPTURE_MAX_DIMENSION ||
+            *frame.stride < *frame.width * 4ULL)
+            return std::unexpected(std::format("realm control capture metadata is invalid: width={}, height={}, stride={}, maximum_dimension={}", *frame.width, *frame.height,
+                                               *frame.stride, REALM_CAPTURE_MAX_DIMENSION));
         if (*frame.height > std::numeric_limits<uint64_t>::max() / *frame.stride || *frame.byte_size != static_cast<uint64_t>(*frame.stride) * *frame.height ||
             *frame.byte_size > REALM_CAPTURE_MAX_BYTES)
             return std::unexpected("realm control capture size is invalid");
@@ -423,13 +427,22 @@ std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::opti
                 return std::unexpected(size == 0 ? "realm capture ended before its declared size" : std::format("failed reading realm capture: {}", strerror(errno)));
             offset += static_cast<size_t>(size);
         }
+        if (!region) {
+            m_coordinateWidth  = captured.width;
+            m_coordinateHeight = captured.height;
+        }
         return captured;
     }
     return std::unexpected("too many unmatched realm control events while waiting for a capture");
 }
 
 std::expected<std::string, std::string> CRealmControlClient::movePointer(uint32_t x, uint32_t y) {
-    return input("pointer.move", std::format(R"("x":{},"y":{})", x, y));
+    return input("pointer.move", std::format(R"("x":{},"y":{},"width":{},"height":{})", x, y, m_coordinateWidth, m_coordinateHeight));
+}
+
+std::expected<std::string, std::string> CRealmControlClient::pointAndClick(uint32_t x, uint32_t y, std::string_view button, uint32_t count) {
+    return input("pointer.point_and_click",
+                 std::format(R"("x":{},"y":{},"width":{},"height":{},"button":{},"count":{})", x, y, m_coordinateWidth, m_coordinateHeight, quoteJSON(button), count));
 }
 
 std::expected<std::string, std::string> CRealmControlClient::clickPointer(std::string_view button) {
@@ -444,10 +457,28 @@ std::expected<std::string, std::string> CRealmControlClient::pressKey(uint32_t k
     return input("keyboard.press", std::format(R"("keycode":{})", keycode));
 }
 
+std::expected<std::string, std::string> CRealmControlClient::pressShortcut(const std::vector<uint32_t>& keycodes) {
+    std::string encoded;
+    for (const auto keycode : keycodes) {
+        if (!encoded.empty())
+            encoded += ',';
+        encoded += std::to_string(keycode);
+    }
+    return input("keyboard.shortcut", std::format(R"("keycodes":[{}])", encoded));
+}
+
 std::expected<std::string, std::string> CRealmControlClient::typeText(std::string_view text) {
     return input("keyboard.type", std::format(R"("text":{})", quoteJSON(text)));
 }
 
 const std::string& CRealmControlClient::realm() const {
     return m_realm;
+}
+
+uint32_t CRealmControlClient::coordinateWidth() const {
+    return m_coordinateWidth;
+}
+
+uint32_t CRealmControlClient::coordinateHeight() const {
+    return m_coordinateHeight;
 }

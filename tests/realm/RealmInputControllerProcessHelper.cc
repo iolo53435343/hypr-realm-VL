@@ -46,6 +46,8 @@ static const char* messageName(eRealmInputMessageType type) {
         case eRealmInputMessageType::POINTER_CLICK: return "POINTER_CLICK";
         case eRealmInputMessageType::KEYBOARD_PRESS: return "KEYBOARD_PRESS";
         case eRealmInputMessageType::INPUT_APPLIED: return "INPUT_APPLIED";
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK: return "POINTER_POINT_AND_CLICK";
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT: return "KEYBOARD_SHORTCUT";
     }
     return "UNKNOWN";
 }

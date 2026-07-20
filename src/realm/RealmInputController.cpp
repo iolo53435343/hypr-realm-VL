@@ -91,9 +91,11 @@ static std::optional<eRealmCapability> capabilityForInputMessage(eRealmInputMess
         case eRealmInputMessageType::POINTER_MOVE:
         case eRealmInputMessageType::POINTER_BUTTON:
         case eRealmInputMessageType::POINTER_CLICK:
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK:
         case eRealmInputMessageType::POINTER_SCROLL: return eRealmCapability::POINTER;
         case eRealmInputMessageType::KEYBOARD_KEY:
         case eRealmInputMessageType::KEYBOARD_PRESS:
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT:
         case eRealmInputMessageType::KEYBOARD_TYPE: return eRealmCapability::KEYBOARD;
         default: return std::nullopt;
     }

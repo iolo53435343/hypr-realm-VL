@@ -97,6 +97,7 @@ namespace Render {
         bool                                isSoftware();
         bool                                isMgpu();
         void                                addWindowToRenderUnfocused(PHLWINDOW window);
+        void                                addInternalWindowToRenderUnfocused(PHLWINDOW window);
         SP<IFramebuffer>                    makeSnapshotFB(PHLWINDOW);
         SP<IFramebuffer>                    makeSnapshotFB(PHLLS);
         SP<IFramebuffer>                    makeSnapshotFB(WP<Desktop::View::CPopup>);
@@ -304,9 +305,14 @@ namespace Render {
             bool hiddenOnKeyboard = false;
         } m_cursorHiddenConditions;
 
-        std::vector<SP<IRenderbuffer>> m_renderbuffers;
-        std::vector<PHLWINDOWREF>      m_renderUnfocused;
-        SP<CEventLoopTimer>            m_renderUnfocusedTimer;
+        struct SRenderUnfocusedWindow {
+            PHLWINDOWREF window;
+            bool         internal = false;
+        };
+
+        std::vector<SP<IRenderbuffer>>      m_renderbuffers;
+        std::vector<SRenderUnfocusedWindow> m_renderUnfocused;
+        SP<CEventLoopTimer>                 m_renderUnfocusedTimer;
 
         friend class CRenderPass;
         friend class Render::GL::CHyprOpenGLImpl;
@@ -318,6 +324,7 @@ namespace Render {
         friend class CMonitorFrameScheduler;
 
       private:
+        void addWindowToRenderUnfocused(PHLWINDOW window, bool internal);
         void bindOffMain();
         void bindBackOnMain();
     };

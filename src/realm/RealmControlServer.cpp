@@ -24,6 +24,7 @@
 #include <linux/input-event-codes.h>
 #include <map>
 #include <optional>
+#include <set>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -38,17 +39,19 @@ using namespace Hyprutils::OS;
 using namespace Realm;
 
 struct SRealmControlParams {
-    std::optional<std::string> realm;
-    std::optional<uint32_t>    x;
-    std::optional<uint32_t>    y;
-    std::optional<uint32_t>    width;
-    std::optional<uint32_t>    height;
-    std::optional<std::string> button;
-    std::optional<std::string> axis;
-    std::optional<int32_t>     steps;
-    std::optional<uint32_t>    keycode;
-    std::optional<bool>        pressed;
-    std::optional<std::string> text;
+    std::optional<std::string>           realm;
+    std::optional<uint32_t>              x;
+    std::optional<uint32_t>              y;
+    std::optional<uint32_t>              width;
+    std::optional<uint32_t>              height;
+    std::optional<std::string>           button;
+    std::optional<std::string>           axis;
+    std::optional<int32_t>               steps;
+    std::optional<uint32_t>              keycode;
+    std::optional<std::vector<uint32_t>> keycodes;
+    std::optional<uint32_t>              count;
+    std::optional<bool>                  pressed;
+    std::optional<std::string>           text;
 };
 
 struct SRealmControlRequest {
@@ -93,14 +96,15 @@ static std::string realmResult(std::string_view action, const SP<CRealm>& realm)
 }
 
 static bool hasAutomationParameters(const SRealmControlParams& params) {
-    return params.x || params.y || params.width || params.height || params.button || params.axis || params.steps || params.keycode || params.pressed || params.text;
+    return params.x || params.y || params.width || params.height || params.button || params.axis || params.steps || params.keycode || params.keycodes || params.count ||
+        params.pressed || params.text;
 }
 
 static bool onlyRealmAnd(const SRealmControlParams& params, std::initializer_list<std::string_view> fields) {
     const auto contains = [&fields](std::string_view field) { return std::ranges::find(fields, field) != fields.end(); };
     return (!params.x || contains("x")) && (!params.y || contains("y")) && (!params.width || contains("width")) && (!params.height || contains("height")) &&
         (!params.button || contains("button")) && (!params.axis || contains("axis")) && (!params.steps || contains("steps")) && (!params.keycode || contains("keycode")) &&
-        (!params.pressed || contains("pressed")) && (!params.text || contains("text"));
+        (!params.keycodes || contains("keycodes")) && (!params.count || contains("count")) && (!params.pressed || contains("pressed")) && (!params.text || contains("text"));
 }
 
 static std::string inputResult(uint32_t sequence, const SP<CRealm>& realm) {
@@ -116,16 +120,51 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
     const auto&        params = *request.params;
     SRealmInputMessage message;
     if (method == "pointer.move") {
-        if (!params.x || !params.y || !onlyRealmAnd(params, {"x", "y"}))
-            return controlError(request.request_id, "invalid_params", "pointer.move requires only params.realm, params.x, and params.y");
-        if (*params.x >= REALM_INPUT_OUTPUT_WIDTH || *params.y >= REALM_INPUT_OUTPUT_HEIGHT)
-            return controlError(request.request_id, "invalid_params", "pointer coordinates must be inside the 1280x720 realm output");
+        if (!params.x || !params.y || !onlyRealmAnd(params, {"x", "y", "width", "height"}) || params.width.has_value() != params.height.has_value())
+            return controlError(request.request_id, "invalid_params",
+                                "pointer.move requires params.realm, params.x, params.y, and optional params.width and params.height together");
+        const auto width  = params.width.value_or(REALM_INPUT_OUTPUT_WIDTH);
+        const auto height = params.height.value_or(REALM_INPUT_OUTPUT_HEIGHT);
+        if (width == 0 || height == 0 || width > REALM_CAPTURE_MAX_DIMENSION || height > REALM_CAPTURE_MAX_DIMENSION || *params.x >= width || *params.y >= height)
+            return controlError(request.request_id, "invalid_params", "pointer coordinates must be inside the declared realm coordinate space");
         message = SRealmInputMessage{
             .type   = eRealmInputMessageType::POINTER_MOVE,
             .x      = *params.x,
             .y      = *params.y,
-            .width  = REALM_INPUT_OUTPUT_WIDTH,
-            .height = REALM_INPUT_OUTPUT_HEIGHT,
+            .width  = width,
+            .height = height,
+        };
+    } else if (method == "pointer.point_and_click") {
+        if (!params.x || !params.y || !params.button || !onlyRealmAnd(params, {"x", "y", "width", "height", "button", "count"}) ||
+            params.width.has_value() != params.height.has_value())
+            return controlError(request.request_id, "invalid_params",
+                                "pointer.point_and_click requires params.realm, params.x, params.y, params.button, and optional coordinate dimensions and count");
+
+        const auto width  = params.width.value_or(REALM_INPUT_OUTPUT_WIDTH);
+        const auto height = params.height.value_or(REALM_INPUT_OUTPUT_HEIGHT);
+        const auto count  = params.count.value_or(1);
+        if (width == 0 || height == 0 || width > REALM_CAPTURE_MAX_DIMENSION || height > REALM_CAPTURE_MAX_DIMENSION || *params.x >= width || *params.y >= height)
+            return controlError(request.request_id, "invalid_params", "point-and-click coordinates must be inside the declared realm coordinate space");
+        if (count == 0 || count > 3)
+            return controlError(request.request_id, "invalid_params", "point-and-click count must be between 1 and 3");
+
+        uint32_t code = 0;
+        if (*params.button == "left")
+            code = BTN_LEFT;
+        else if (*params.button == "right")
+            code = BTN_RIGHT;
+        else if (*params.button == "middle")
+            code = BTN_MIDDLE;
+        else
+            return controlError(request.request_id, "invalid_params", "pointer button must be 'left', 'right', or 'middle'");
+        message = SRealmInputMessage{
+            .type   = eRealmInputMessageType::POINTER_POINT_AND_CLICK,
+            .x      = *params.x,
+            .y      = *params.y,
+            .width  = width,
+            .height = height,
+            .code   = code,
+            .count  = count,
         };
     } else if (method == "pointer.button" || method == "pointer.click") {
         const bool atomic = method == "pointer.click";
@@ -173,6 +212,19 @@ static std::string handleInputRequest(const SRealmControlRequest& request, const
             .type    = atomic ? eRealmInputMessageType::KEYBOARD_PRESS : eRealmInputMessageType::KEYBOARD_KEY,
             .code    = *params.keycode,
             .pressed = atomic ? false : *params.pressed,
+        };
+    } else if (method == "keyboard.shortcut") {
+        if (!params.keycodes || !onlyRealmAnd(params, {"keycodes"}))
+            return controlError(request.request_id, "invalid_params", "keyboard.shortcut requires only params.realm and params.keycodes");
+        if (params.keycodes->size() < 2 || params.keycodes->size() > 8)
+            return controlError(request.request_id, "invalid_params", "keyboard shortcut must contain between 2 and 8 keycodes");
+        if (std::ranges::any_of(*params.keycodes, [](uint32_t keycode) { return keycode > KEY_MAX; }))
+            return controlError(request.request_id, "invalid_params", std::format("keyboard shortcut keycodes must not exceed {}", KEY_MAX));
+        if (std::set<uint32_t>{params.keycodes->begin(), params.keycodes->end()}.size() != params.keycodes->size())
+            return controlError(request.request_id, "invalid_params", "keyboard shortcut keycodes must be unique");
+        message = SRealmInputMessage{
+            .type  = eRealmInputMessageType::KEYBOARD_SHORTCUT,
+            .codes = *params.keycodes,
         };
     } else if (method == "keyboard.type") {
         if (!params.text || !onlyRealmAnd(params, {"text"}))
@@ -246,10 +298,29 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
         return controlSuccess(*request.request_id, std::format(R"({{"realms":{}}})", realmListRequest(manager, FORMAT_JSON)));
     }
 
-    constexpr std::array<std::string_view, 20> REALM_METHODS = {
-        "realm.info",     "realm.create",  "realm.start",    "realm.pause",     "realm.resume",   "realm.stop",           "realm.destroy",
-        "realm.takeover", "realm.release", "realm.observe",  "realm.unobserve", "realm.capture",  "realm.capture_region", "pointer.move",
-        "pointer.button", "pointer.click", "pointer.scroll", "keyboard.key",    "keyboard.press", "keyboard.type",
+    constexpr std::array<std::string_view, 22> REALM_METHODS = {
+        "realm.info",
+        "realm.create",
+        "realm.start",
+        "realm.pause",
+        "realm.resume",
+        "realm.stop",
+        "realm.destroy",
+        "realm.takeover",
+        "realm.release",
+        "realm.observe",
+        "realm.unobserve",
+        "realm.capture",
+        "realm.capture_region",
+        "pointer.move",
+        "pointer.button",
+        "pointer.click",
+        "pointer.point_and_click",
+        "pointer.scroll",
+        "keyboard.key",
+        "keyboard.press",
+        "keyboard.shortcut",
+        "keyboard.type",
     };
     if (std::ranges::find(REALM_METHODS, method) == REALM_METHODS.end())
         return controlError(request.request_id, "method_not_found", std::format("unknown method '{}'", method));
@@ -257,8 +328,8 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
     if (!request.params || !request.params->realm || request.params->realm->empty())
         return controlError(request.request_id, "invalid_params", std::format("{} requires params.realm", method));
 
-    const bool inputMethod = method == "pointer.move" || method == "pointer.button" || method == "pointer.click" || method == "pointer.scroll" || method == "keyboard.key" ||
-        method == "keyboard.press" || method == "keyboard.type";
+    const bool inputMethod = method == "pointer.move" || method == "pointer.button" || method == "pointer.click" || method == "pointer.point_and_click" ||
+        method == "pointer.scroll" || method == "keyboard.key" || method == "keyboard.press" || method == "keyboard.shortcut" || method == "keyboard.type";
     const bool captureMethod = method == "realm.capture" || method == "realm.capture_region";
     if (!inputMethod && !captureMethod && hasAutomationParameters(*request.params))
         return controlError(request.request_id, "invalid_params", std::format("{} does not accept automation parameters", method));

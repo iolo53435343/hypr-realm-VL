@@ -7,7 +7,7 @@
 using namespace Realm;
 
 static constexpr uint32_t REALM_INPUT_PROTOCOL_MAGIC   = 0x48524149;
-static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 3;
+static constexpr uint16_t REALM_INPUT_PROTOCOL_VERSION = 4;
 static constexpr size_t   REALM_INPUT_HEADER_SIZE      = 16;
 static constexpr size_t   REALM_INPUT_MAX_PACKET_SIZE  = REALM_INPUT_HEADER_SIZE + REALM_INPUT_MAX_TEXT_SIZE;
 
@@ -56,7 +56,9 @@ static bool isKnownType(eRealmInputMessageType type) {
         case eRealmInputMessageType::CAPTURE_CANCEL:
         case eRealmInputMessageType::POINTER_CLICK:
         case eRealmInputMessageType::KEYBOARD_PRESS:
-        case eRealmInputMessageType::INPUT_APPLIED: return true;
+        case eRealmInputMessageType::INPUT_APPLIED:
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK:
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT: return true;
     }
 
     return false;
@@ -87,6 +89,18 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
             appendUint32(payload, message.height);
             break;
         }
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK: {
+            if (message.width == 0 || message.height == 0 || message.width > REALM_CAPTURE_MAX_DIMENSION || message.height > REALM_CAPTURE_MAX_DIMENSION ||
+                message.x >= message.width || message.y >= message.height || message.count == 0 || message.count > 3)
+                return std::unexpected("point-and-click coordinates and count must describe a valid realm output action");
+            appendUint32(payload, message.x);
+            appendUint32(payload, message.y);
+            appendUint32(payload, message.width);
+            appendUint32(payload, message.height);
+            appendUint32(payload, message.code);
+            appendUint32(payload, message.count);
+            break;
+        }
         case eRealmInputMessageType::CAPTURE_REGION: {
             if (message.width == 0 || message.height == 0 || message.x >= REALM_INPUT_OUTPUT_WIDTH || message.y >= REALM_INPUT_OUTPUT_HEIGHT ||
                 message.width > REALM_INPUT_OUTPUT_WIDTH - message.x || message.height > REALM_INPUT_OUTPUT_HEIGHT - message.y)
@@ -105,6 +119,14 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
         }
         case eRealmInputMessageType::POINTER_CLICK:
         case eRealmInputMessageType::KEYBOARD_PRESS: appendUint32(payload, message.code); break;
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT: {
+            if (message.codes.size() < 2 || message.codes.size() > 8)
+                return std::unexpected("keyboard shortcut must contain between 2 and 8 keycodes");
+            appendUint32(payload, static_cast<uint32_t>(message.codes.size()));
+            for (const auto code : message.codes)
+                appendUint32(payload, code);
+            break;
+        }
         case eRealmInputMessageType::POINTER_SCROLL: {
             appendUint32(payload, static_cast<uint32_t>(message.horizontal));
             appendUint32(payload, static_cast<uint32_t>(message.vertical));
@@ -112,7 +134,7 @@ static std::expected<std::vector<uint8_t>, std::string> encodePayload(const SRea
         }
         case eRealmInputMessageType::CAPTURE_READY: {
             if ((message.format != REALM_CAPTURE_FORMAT_ARGB8888 && message.format != REALM_CAPTURE_FORMAT_XRGB8888) || message.width == 0 || message.height == 0 ||
-                message.width > REALM_INPUT_OUTPUT_WIDTH || message.height > REALM_INPUT_OUTPUT_HEIGHT || message.stride < message.width * 4ULL || message.byteSize == 0 ||
+                message.width > REALM_CAPTURE_MAX_DIMENSION || message.height > REALM_CAPTURE_MAX_DIMENSION || message.stride < message.width * 4ULL || message.byteSize == 0 ||
                 message.byteSize > REALM_CAPTURE_MAX_BYTES || message.byteSize != static_cast<uint64_t>(message.stride) * message.height)
                 return std::unexpected("capture metadata does not describe a valid bounded frame");
             appendUint32(payload, message.format);
@@ -198,6 +220,19 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
             if (message.width == 0 || message.height == 0 || message.x >= message.width || message.y >= message.height)
                 return std::unexpected("pointer coordinates must be inside a non-empty realm output");
             break;
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK:
+            if (payloadSize != 24)
+                return std::unexpected("point-and-click payload has an invalid length");
+            message.x      = readUint32(payload);
+            message.y      = readUint32(payload + 4);
+            message.width  = readUint32(payload + 8);
+            message.height = readUint32(payload + 12);
+            message.code   = readUint32(payload + 16);
+            message.count  = readUint32(payload + 20);
+            if (message.width == 0 || message.height == 0 || message.width > REALM_CAPTURE_MAX_DIMENSION || message.height > REALM_CAPTURE_MAX_DIMENSION ||
+                message.x >= message.width || message.y >= message.height || message.count == 0 || message.count > 3)
+                return std::unexpected("point-and-click coordinates and count must describe a valid realm output action");
+            break;
         case eRealmInputMessageType::CAPTURE_REGION:
             if (payloadSize != 16)
                 return std::unexpected("capture region payload has an invalid length");
@@ -224,6 +259,17 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
                 return std::unexpected("realm input atomic key or button payload has an invalid length");
             message.code = readUint32(payload);
             break;
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT: {
+            if (payloadSize < 12 || payloadSize > 36 || payloadSize % 4 != 0)
+                return std::unexpected("keyboard shortcut payload has an invalid length");
+            const auto count = readUint32(payload);
+            if (count < 2 || count > 8 || payloadSize != 4 + count * 4ULL)
+                return std::unexpected("keyboard shortcut must contain between 2 and 8 keycodes");
+            message.codes.reserve(count);
+            for (uint32_t index = 0; index < count; ++index)
+                message.codes.emplace_back(readUint32(payload + 4 + index * 4));
+            break;
+        }
         case eRealmInputMessageType::POINTER_SCROLL:
             if (payloadSize != 8)
                 return std::unexpected("pointer scroll payload has an invalid length");
@@ -240,7 +286,7 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(co
             message.flags    = readUint32(payload + 16);
             message.byteSize = readUint64(payload + 20);
             if ((message.format != REALM_CAPTURE_FORMAT_ARGB8888 && message.format != REALM_CAPTURE_FORMAT_XRGB8888) || message.width == 0 || message.height == 0 ||
-                message.width > REALM_INPUT_OUTPUT_WIDTH || message.height > REALM_INPUT_OUTPUT_HEIGHT || message.stride < message.width * 4ULL || message.byteSize == 0 ||
+                message.width > REALM_CAPTURE_MAX_DIMENSION || message.height > REALM_CAPTURE_MAX_DIMENSION || message.stride < message.width * 4ULL || message.byteSize == 0 ||
                 message.byteSize > REALM_CAPTURE_MAX_BYTES || message.byteSize != static_cast<uint64_t>(message.stride) * message.height)
                 return std::unexpected("capture metadata does not describe a valid bounded frame");
             break;
@@ -254,6 +300,8 @@ std::expected<SRealmInputMessage, std::string> Realm::decodeRealmInputMessage(st
 }
 
 size_t Realm::realmInputEventCost(const SRealmInputMessage& message) {
+    if (message.type == eRealmInputMessageType::KEYBOARD_SHORTCUT)
+        return std::max<size_t>(1, message.codes.size());
     if (message.type != eRealmInputMessageType::KEYBOARD_TYPE)
         return 1;
 
@@ -268,6 +316,8 @@ bool Realm::realmInputMessageIsInputCommand(eRealmInputMessageType type) {
         case eRealmInputMessageType::POINTER_SCROLL:
         case eRealmInputMessageType::KEYBOARD_KEY:
         case eRealmInputMessageType::KEYBOARD_PRESS:
+        case eRealmInputMessageType::POINTER_POINT_AND_CLICK:
+        case eRealmInputMessageType::KEYBOARD_SHORTCUT:
         case eRealmInputMessageType::KEYBOARD_TYPE: return true;
         default: return false;
     }

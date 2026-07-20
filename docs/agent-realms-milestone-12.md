@@ -69,19 +69,25 @@ This acknowledgement proves ordered delivery to the realm compositor. It does
 not claim that an application accepted a click, completed a navigation, or
 finished rendering. Agents should capture again after visible actions.
 
-## Stable capture coordinates
+## Native capture coordinates
 
-The embedded realm window is resizable, while agent input intentionally uses a
-stable 1280x720 logical coordinate space. The MCP adapter captures the current
-nested output and normalizes it to 1280x720 before returning the PNG. Region
-captures crop that normalized image. Screenshot pixels and `move_pointer`
-coordinates therefore remain aligned when the operator tiles or resizes the
-realm window.
+The embedded realm window is resizable, so the MCP adapter captures the
+complete nested output at its native dimensions. Callers do not supply a full
+capture size. Each successful capture reports the exact width and height, and
+subsequent `move_pointer` and `point_and_click` calls use that same coordinate
+space. Before the first capture, the original 1280x720 space remains as a
+compatibility fallback. Optional region captures crop the native frame without
+resampling it.
 
 Ordinary screencopy requests explicitly schedule a compositor frame. This is
 important for idle nested outputs, where adding damage that is already pending
 may otherwise fail to produce another frame. Capture timeout recovery still
 cancels one stalled frame and retries it once.
+
+Recognized realm compositor windows also use Hyprland's throttled background
+frame path when they are offscreen. This keeps inactive-workspace realms
+observable without changing the user's `render_unfocused` rules or affecting
+ordinary application windows.
 
 Capture rate limiting remains intentional. Requests above the configured
 burst or sustained rate return `rate_limited` immediately; they are not queued.
@@ -89,10 +95,10 @@ burst or sustained rate return `rate_limited` immediately; they are not queued.
 ## Safety and verification
 
 Unit tests cover input protocol acknowledgements, control-socket completion
-events, MCP normalized full and region PNG dimensions, and the status-bar
-control layout. A disposable nested-compositor test verifies visible software
-cursors, cursor-inclusive MCP captures, back-to-back idle captures, and the
-Take Over/Release interaction.
+events, MCP native full and region PNG dimensions, and the status-bar control
+layout. A disposable nested-compositor test verifies visible software cursors,
+cursor-inclusive MCP captures, back-to-back idle captures, and the Take
+Over/Release interaction.
 
 The test flow does not install the fork, reload the operator's configuration,
 or restart the active host compositor.

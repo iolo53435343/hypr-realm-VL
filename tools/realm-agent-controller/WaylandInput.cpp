@@ -16,6 +16,7 @@
 #include <format>
 #include <map>
 #include <optional>
+#include <ranges>
 #include <set>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -405,13 +406,15 @@ struct CWaylandInput::SImpl {
             return failCapture("realm compositor did not offer a shared-memory capture format");
         if (capture->format != WL_SHM_FORMAT_ARGB8888 && capture->format != WL_SHM_FORMAT_XRGB8888)
             return failCapture("realm compositor offered an unsupported shared-memory capture format");
-        if (capture->width == 0 || capture->height == 0 || capture->width > REALM_INPUT_OUTPUT_WIDTH || capture->height > REALM_INPUT_OUTPUT_HEIGHT ||
+        if (capture->width == 0 || capture->height == 0 || capture->width > REALM_CAPTURE_MAX_DIMENSION || capture->height > REALM_CAPTURE_MAX_DIMENSION ||
             capture->stride < capture->width * 4ULL)
-            return failCapture("realm compositor offered invalid capture dimensions");
+            return failCapture(std::format("realm compositor offered invalid capture metadata: width={}, height={}, stride={}, format={}, maximum_dimension={}", capture->width,
+                                           capture->height, capture->stride, capture->format, REALM_CAPTURE_MAX_DIMENSION));
 
         capture->byteSize = static_cast<uint64_t>(capture->stride) * capture->height;
         if (capture->byteSize == 0 || capture->byteSize > REALM_CAPTURE_MAX_BYTES || capture->byteSize > static_cast<uint64_t>(INT_MAX))
-            return failCapture("realm capture exceeds the shared-memory limit");
+            return failCapture(
+                std::format("realm capture requires {} bytes, exceeding the {}-byte shared-memory limit", capture->byteSize, std::min<uint64_t>(REALM_CAPTURE_MAX_BYTES, INT_MAX)));
 
         capture->fd = createAnonymousFile(static_cast<size_t>(capture->byteSize), "hypr-realm-frame");
         if (capture->fd < 0)
@@ -581,6 +584,14 @@ struct CWaylandInput::SImpl {
                 zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 return queueInputAcknowledgement(message.sequence);
+            case eRealmInputMessageType::POINTER_POINT_AND_CLICK:
+                zwlr_virtual_pointer_v1_motion_absolute(pointer, time, message.x, message.y, message.width, message.height);
+                for (uint32_t click = 0; click < message.count; ++click) {
+                    zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_PRESSED);
+                    zwlr_virtual_pointer_v1_button(pointer, time, message.code, WL_POINTER_BUTTON_STATE_RELEASED);
+                }
+                zwlr_virtual_pointer_v1_frame(pointer);
+                return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::POINTER_SCROLL:
                 zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
                 if (message.vertical != 0)
@@ -599,6 +610,12 @@ struct CWaylandInput::SImpl {
             case eRealmInputMessageType::KEYBOARD_PRESS:
                 zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_PRESSED);
                 zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_RELEASED);
+                return queueInputAcknowledgement(message.sequence);
+            case eRealmInputMessageType::KEYBOARD_SHORTCUT:
+                for (const auto code : message.codes)
+                    zwp_virtual_keyboard_v1_key(keyboard, time, code, WL_KEYBOARD_KEY_STATE_PRESSED);
+                for (const auto code : message.codes | std::views::reverse)
+                    zwp_virtual_keyboard_v1_key(keyboard, time, code, WL_KEYBOARD_KEY_STATE_RELEASED);
                 return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::KEYBOARD_TYPE:
                 if (const auto typed = typeText(message.text); !typed)

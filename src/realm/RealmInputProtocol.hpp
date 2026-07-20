@@ -11,6 +11,7 @@ namespace Realm {
     inline constexpr size_t   REALM_INPUT_MAX_TEXT_SIZE     = 4096;
     inline constexpr uint32_t REALM_INPUT_OUTPUT_WIDTH      = 1280;
     inline constexpr uint32_t REALM_INPUT_OUTPUT_HEIGHT     = 720;
+    inline constexpr uint32_t REALM_CAPTURE_MAX_DIMENSION   = 16384;
     inline constexpr uint64_t REALM_CAPTURE_MAX_BYTES       = 64ULL * 1024ULL * 1024ULL;
     inline constexpr uint32_t REALM_CAPTURE_FORMAT_ARGB8888 = 0;
     inline constexpr uint32_t REALM_CAPTURE_FORMAT_XRGB8888 = 1;
@@ -31,6 +32,8 @@ namespace Realm {
         POINTER_CLICK,
         KEYBOARD_PRESS,
         INPUT_APPLIED,
+        POINTER_POINT_AND_CLICK,
+        KEYBOARD_SHORTCUT,
     };
 
     struct SRealmInputMessage {
@@ -47,8 +50,10 @@ namespace Realm {
         uint32_t               format     = 0;
         uint32_t               stride     = 0;
         uint32_t               flags      = 0;
+        uint32_t               count      = 0;
         uint64_t               byteSize   = 0;
         std::string            text;
+        std::vector<uint32_t>  codes;
     };
 
     std::expected<std::vector<uint8_t>, std::string> encodeRealmInputMessage(const SRealmInputMessage& message);

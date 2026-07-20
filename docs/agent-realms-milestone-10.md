@@ -38,6 +38,9 @@ Wayland connection is opened.
 The adapter implements newline-delimited JSON-RPC over stdin/stdout and
 negotiates the MCP protocol during `initialize`. Its tool surface is:
 
+The recommended observe-act-observe workflow and completion semantics are
+documented in [agent-realms-computer-use.md](agent-realms-computer-use.md).
+
 | Tool | Operation |
 | --- | --- |
 | `realm_info` | inspect state, ownership, permission, and capabilities |
@@ -48,20 +51,24 @@ negotiates the MCP protocol during `initialize`. Its tool surface is:
 | `realm_stop` | stop, but do not destroy, the bound realm |
 | `enable_observation` | activate runtime observation after a host grant |
 | `disable_observation` | revoke runtime observation and pending captures |
-| `capture_realm` | return a full or bounded region as MCP `image/png` content |
-| `move_pointer` | move the realm's virtual pointer |
+| `capture_realm` | return the native realm frame, optionally crop it or wait for a visual change |
+| `move_pointer` | move the realm's virtual pointer in the latest capture coordinates |
+| `point_and_click` | atomically move and click in the latest capture coordinates |
 | `click` | atomically press and release a realm pointer button |
 | `scroll` | send a bounded realm pointer scroll |
-| `press_key` | atomically press and release one Linux evdev keycode |
+| `press_key` | atomically press and release a named key or compatibility evdev keycode |
+| `press_shortcut` | atomically press a named key with modifiers |
 | `type_text` | type up to 4096 bytes of UTF-8 text |
+| `wait` | wait for bounded application navigation or animation time |
 
-Click and key press are single host control commands and single controller
-messages. The realm helper emits both Wayland states before flushing, avoiding
-a stuck virtual key or button if an adapter connection fails between two
-requests. The lower-level held-state methods remain available to the private
-control protocol for deliberate key/button holds and are not exposed as MCP
-tools. The private controller protocol version is incremented so a mismatched
-old helper fails during startup instead of silently ignoring these commands.
+Click, point-and-click, key press, and shortcuts are single host control
+commands and single controller messages. The realm helper emits each complete
+action before flushing, avoiding a stuck virtual key or button if an adapter
+connection fails between requests. The lower-level held-state methods remain
+available to the private control protocol for deliberate key/button holds and
+are not exposed as MCP tools. The private controller protocol version is
+incremented so a mismatched old helper fails during startup instead of silently
+ignoring these commands.
 
 All compositor-side Milestone 9 checks remain authoritative. The MCP adapter
 cannot grant or revoke capabilities. A host operator must grant the relevant

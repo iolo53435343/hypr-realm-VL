@@ -61,6 +61,7 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         updateWindowInputOwner(*associated);
         updateWindowANRSuppression(*associated);
         updateHostCursorVisibility(Pointer::mgr()->position());
+        g_pHyprRenderer->addInternalWindowToRenderUnfocused(window);
     });
 
     m_impl->windowCloseListener = Event::bus()->m_events.window.close.listen([this](PHLWINDOW window) {

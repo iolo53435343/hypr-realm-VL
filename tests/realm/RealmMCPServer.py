@@ -19,6 +19,7 @@ class FakeRealmControlServer:
     def __init__(self, root: pathlib.Path):
         self.path = root / ".realm.sock"
         self.requests = []
+        self.capture_counter = 0
         self.error = None
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.bind(str(self.path))
@@ -75,6 +76,7 @@ class FakeRealmControlServer:
                         continue
 
                     if method in ("realm.capture", "realm.capture_region"):
+                        self.capture_counter += 1
                         connection.sendall(
                             self._frame(
                                 {
@@ -94,7 +96,7 @@ class FakeRealmControlServer:
                                 descriptor,
                                 bytes(
                                     [
-                                        0x00,
+                                        self.capture_counter & 0xFF,
                                         0x00,
                                         0xFF,
                                         0x00,
@@ -150,8 +152,10 @@ class FakeRealmControlServer:
                     if method in (
                         "pointer.move",
                         "pointer.click",
+                        "pointer.point_and_click",
                         "pointer.scroll",
                         "keyboard.press",
+                        "keyboard.shortcut",
                         "keyboard.type",
                     ):
                         connection.sendall(
@@ -263,6 +267,8 @@ class RealmMCPServerTest(unittest.TestCase):
         )
         self.assertEqual(response["result"]["protocolVersion"], "2025-11-25")
         self.assertEqual(response["result"]["serverInfo"]["name"], "hyprland-realm")
+        self.assertIn("capture_realm", response["result"]["instructions"])
+        self.assertIn("point_and_click", response["result"]["instructions"])
 
     def test_realm_bound_tools_and_capture(self):
         self.initialize()
@@ -270,6 +276,9 @@ class RealmMCPServerTest(unittest.TestCase):
         listed = self.call("tools/list", {}, 2)["result"]["tools"]
         names = {tool["name"] for tool in listed}
         self.assertIn("capture_realm", names)
+        self.assertIn("point_and_click", names)
+        self.assertIn("press_shortcut", names)
+        self.assertIn("wait", names)
         self.assertIn("type_text", names)
         self.assertNotIn("open_application", names)
         for tool in listed:
@@ -286,12 +295,22 @@ class RealmMCPServerTest(unittest.TestCase):
 
         moved = self.tool("move_pointer", {"x": 12, "y": 34}, 5)
         self.assertFalse(moved["isError"])
+        self.assertEqual(moved["structuredContent"]["action"], "applied")
+        self.assertIn("elapsed_ms", moved["structuredContent"])
+        pointed = self.tool("point_and_click", {"x": 20, "y": 30}, "5-point")
+        self.assertFalse(pointed["isError"])
         clicked = self.tool("click", {"button": "left"}, 6)
         self.assertFalse(clicked["isError"])
         pressed = self.tool("press_key", {"keycode": 30}, 7)
         self.assertFalse(pressed["isError"])
+        named = self.tool("press_key", {"key": "enter"}, "7-named")
+        self.assertFalse(named["isError"])
+        shortcut = self.tool("press_shortcut", {"modifiers": ["ctrl"], "key": "t"}, "7-shortcut")
+        self.assertFalse(shortcut["isError"])
         typed = self.tool("type_text", {"text": "hello realm"}, 8)
         self.assertFalse(typed["isError"])
+        waited = self.tool("wait", {"duration_ms": 0}, "8-wait")
+        self.assertFalse(waited["isError"])
 
         denied = self.tool("scroll", {"axis": "vertical", "steps": 13}, 9)
         self.assertTrue(denied["isError"])
@@ -304,22 +323,49 @@ class RealmMCPServerTest(unittest.TestCase):
         self.assertEqual(image["mimeType"], "image/png")
         png = base64.b64decode(image["data"])
         self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
-        self.assertEqual(struct.unpack(">II", png[16:24]), (1280, 720))
+        self.assertEqual(struct.unpack(">II", png[16:24]), (2, 2))
         self.assertEqual(captured["structuredContent"]["source_width"], 2)
         self.assertEqual(captured["structuredContent"]["source_height"], 2)
 
-        region = self.tool("capture_realm", {"x": 10, "y": 20, "width": 100, "height": 80}, 11)
+        native_pointed = self.tool("point_and_click", {"x": 1, "y": 1}, "10-native-point")
+        self.assertFalse(native_pointed["isError"])
+
+        region = self.tool("capture_realm", {"x": 1, "y": 1, "width": 1, "height": 1}, 11)
         self.assertFalse(region["isError"])
         region_png = base64.b64decode(region["content"][0]["data"])
-        self.assertEqual(struct.unpack(">II", region_png[16:24]), (100, 80))
+        self.assertEqual(struct.unpack(">II", region_png[16:24]), (1, 1))
+
+        out_of_bounds = self.tool("move_pointer", {"x": 2, "y": 0}, "11-bounds")
+        self.assertTrue(out_of_bounds["isError"])
+        self.assertIn("2x2", out_of_bounds["content"][0]["text"])
+
+        changed = self.tool(
+            "capture_realm",
+            {
+                "wait_for_change": True,
+                "timeout_ms": 1000,
+                "poll_interval_ms": 250,
+            },
+            12,
+        )
+        self.assertFalse(changed["isError"])
+        self.assertTrue(changed["structuredContent"]["waited_for_change"])
+        self.assertEqual(changed["structuredContent"]["coordinate_width"], 2)
+        self.assertGreaterEqual(changed["structuredContent"]["elapsed_ms"], 250)
 
         self.assertTrue(self.control.requests)
         self.assertTrue(all(request["params"]["realm"] == "codex" for request in self.control.requests))
         methods = [request["method"] for request in self.control.requests]
         self.assertEqual(methods.count("pointer.click"), 1)
-        self.assertEqual(methods.count("keyboard.press"), 1)
-        self.assertEqual(methods.count("realm.capture"), 2)
+        self.assertEqual(methods.count("pointer.point_and_click"), 2)
+        self.assertEqual(methods.count("keyboard.press"), 2)
+        self.assertEqual(methods.count("keyboard.shortcut"), 1)
+        self.assertEqual(methods.count("realm.capture"), 3)
         self.assertNotIn("realm.capture_region", methods)
+        move = next(request for request in self.control.requests if request["method"] == "pointer.move")
+        self.assertEqual((move["params"]["width"], move["params"]["height"]), (1280, 720))
+        points = [request for request in self.control.requests if request["method"] == "pointer.point_and_click"]
+        self.assertEqual((points[-1]["params"]["width"], points[-1]["params"]["height"]), (2, 2))
 
 
 class RealmMCPServerSocketSafetyTest(unittest.TestCase):
