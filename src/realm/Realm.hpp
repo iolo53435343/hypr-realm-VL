@@ -82,6 +82,7 @@ namespace Realm {
         pid_t                       m_compositorPID = 0;
         std::string                 m_runtimeDirectory;
         std::string                 m_waylandSocket;
+        std::string                 m_instanceSignature;
         std::string                 m_configPath;
         std::string                 m_logPath;
         int                         m_exitCode              = -1;

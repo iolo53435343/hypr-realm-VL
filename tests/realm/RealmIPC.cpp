@@ -5,13 +5,44 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <map>
+#include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <unistd.h>
 
 using namespace Realm;
+
+static std::string environmentValue(const char* name) {
+    const auto* value = getenv(name);
+    return value ? value : "<unset>";
+}
+
+class CScopedEnvironmentVariable {
+  public:
+    CScopedEnvironmentVariable(std::string name, const std::string& value) : m_name(std::move(name)) {
+        if (const auto* previous = getenv(m_name.c_str()); previous)
+            m_previous = previous;
+        setenv(m_name.c_str(), value.c_str(), 1);
+    }
+
+    ~CScopedEnvironmentVariable() {
+        if (m_previous)
+            setenv(m_name.c_str(), m_previous->c_str(), 1);
+        else
+            unsetenv(m_name.c_str());
+    }
+
+  private:
+    std::string                m_name;
+    std::optional<std::string> m_previous;
+};
 
 static bool waitForIPCState(CRealmManager& manager, const SP<CRealm>& realm, eRealmState state) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -30,6 +61,37 @@ static bool destroyThroughIPC(CRealmManager& manager, CRealmWindowManager& windo
         manager.dispatchPendingEvents();
         const auto response = realmCommandRequest(manager, windowManager, FORMAT_JSON, std::format("realm destroy {}", name));
         if (response.contains(R"("ok":true)"))
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+}
+
+static std::map<std::string, std::string> waitForApplicationState(CRealmManager& manager, const std::filesystem::path& path) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline) {
+        manager.dispatchPendingEvents();
+        std::ifstream state(path);
+        if (state) {
+            std::map<std::string, std::string> values;
+            for (std::string line; std::getline(state, line);) {
+                const auto separator = line.find('=');
+                if (separator != std::string::npos)
+                    values.emplace(line.substr(0, separator), line.substr(separator + 1));
+            }
+            if (values.contains("WAYLAND_SOCKET"))
+                return values;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return {};
+}
+
+static bool waitForProcessExit(CRealmManager& manager, pid_t pid) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline) {
+        manager.dispatchPendingEvents();
+        if (kill(pid, 0) < 0 && errno == ESRCH)
             return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
@@ -109,6 +171,76 @@ TEST_F(CRealmIPCTest, returnsStructuredUsefulErrors) {
     const auto unknown = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm dance duplicate");
     EXPECT_TRUE(unknown.contains(R"("ok":false)"));
     EXPECT_TRUE(unknown.contains("unknown realm action"));
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm open duplicate").contains("requires a name and application"));
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm open duplicate brave").contains("cannot open applications while stopped"));
+}
+
+TEST_F(CRealmIPCTest, opensAnApplicationInsideTheRealmProcessAndEnvironment) {
+    const auto inheritedHome                 = environmentValue("HOME");
+    const auto inheritedCacheHome            = environmentValue("XDG_CACHE_HOME");
+    const auto inheritedConfigHome           = environmentValue("XDG_CONFIG_HOME");
+    const auto inheritedDataHome             = environmentValue("XDG_DATA_HOME");
+    const auto inheritedStateHome            = environmentValue("XDG_STATE_HOME");
+    const auto inheritedTemporaryDirectory   = environmentValue("TMPDIR");
+    const auto inheritedNixOSOzonePreference = environmentValue("NIXOS_OZONE_WL");
+    const auto inheritedMozillaPreference    = environmentValue("MOZ_ENABLE_WAYLAND");
+    const auto inheritedElectronPreference   = environmentValue("ELECTRON_OZONE_PLATFORM_HINT");
+
+    ASSERT_TRUE(m_manager->createRealm("application realm"));
+    const auto realm = m_manager->realmByName("application realm");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
+
+    const auto application = std::filesystem::path(realm->runtimeDirectory()) / "bin/realm-application-helper";
+    std::filesystem::create_symlink(REALM_APPLICATION_HELPER_PATH, application);
+    auto applicationPath = application.parent_path().string();
+    if (const auto inheritedPath = environmentValue("PATH"); inheritedPath != "<unset>")
+        applicationPath += std::format(":{}", inheritedPath);
+    CScopedEnvironmentVariable scopedPath{"PATH", applicationPath};
+
+    const auto                 invalid = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm open application realm brave;touch");
+    EXPECT_TRUE(invalid.contains(R"("ok":false)"));
+    EXPECT_TRUE(invalid.contains("without paths, whitespace, or shell syntax"));
+
+    const auto missing = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm open application realm missing-realm-application");
+    EXPECT_TRUE(missing.contains(R"("ok":false)"));
+    EXPECT_TRUE(missing.contains("failed executing application"));
+
+    const auto opened = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm open application realm realm-application-helper");
+    EXPECT_TRUE(opened.contains(R"("ok":true)"));
+    EXPECT_TRUE(opened.contains(R"("action":"opened")"));
+    EXPECT_TRUE(opened.contains(R"("application":"realm-application-helper")"));
+
+    const auto runtime = std::filesystem::path(realm->runtimeDirectory());
+    const auto state   = waitForApplicationState(*m_manager, runtime / "realm-application-helper.state");
+    ASSERT_FALSE(state.empty());
+    const auto applicationPID = sc<pid_t>(std::stoi(state.at("pid")));
+    EXPECT_EQ(sc<pid_t>(std::stoi(state.at("pgid"))), realm->compositorPID());
+    EXPECT_EQ(getpgid(applicationPID), realm->compositorPID());
+    EXPECT_EQ(state.at("HOME"), inheritedHome);
+    EXPECT_EQ(state.at("XDG_RUNTIME_DIR"), realm->runtimeDirectory());
+    EXPECT_EQ(state.at("XDG_CACHE_HOME"), inheritedCacheHome);
+    EXPECT_EQ(state.at("XDG_CONFIG_HOME"), inheritedConfigHome);
+    EXPECT_EQ(state.at("XDG_DATA_HOME"), inheritedDataHome);
+    EXPECT_EQ(state.at("XDG_STATE_HOME"), inheritedStateHome);
+    EXPECT_EQ(state.at("TMPDIR"), inheritedTemporaryDirectory);
+    EXPECT_EQ(state.at("PATH"), applicationPath);
+    EXPECT_EQ(state.at("NIXOS_OZONE_WL"), inheritedNixOSOzonePreference);
+    EXPECT_EQ(state.at("MOZ_ENABLE_WAYLAND"), inheritedMozillaPreference);
+    EXPECT_EQ(state.at("ELECTRON_OZONE_PLATFORM_HINT"), inheritedElectronPreference);
+    EXPECT_EQ(state.at("WAYLAND_DISPLAY"), realm->waylandSocket());
+    EXPECT_EQ(state.at("HYPRLAND_INSTANCE_SIGNATURE"), "test-instance");
+    EXPECT_EQ(state.at("HYPRLAND_REALM_ID"), std::to_string(realm->id()));
+    EXPECT_EQ(state.at("HYPRLAND_REALM_NAME"), realm->name());
+    EXPECT_EQ(state.at("DISPLAY"), "<unset>");
+    EXPECT_EQ(state.at("SWAYSOCK"), "<unset>");
+    EXPECT_EQ(state.at("WAYLAND_SOCKET"), "<unset>");
+
+    EXPECT_TRUE(realmCommandRequest(*m_manager, *m_windowManager, FORMAT_NORMAL, "realm stop application realm").starts_with("stopping realm"));
+    ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::STOPPED));
+    EXPECT_TRUE(waitForProcessExit(*m_manager, applicationPID));
+    ASSERT_TRUE(destroyThroughIPC(*m_manager, *m_windowManager, "application realm"));
 }
 
 TEST_F(CRealmIPCTest, controlsFullLifecycle) {

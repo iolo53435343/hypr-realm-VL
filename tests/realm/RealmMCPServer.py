@@ -240,6 +240,7 @@ class RealmMCPServerTest(unittest.TestCase):
         names = {tool["name"] for tool in listed}
         self.assertIn("capture_realm", names)
         self.assertIn("type_text", names)
+        self.assertNotIn("open_application", names)
         for tool in listed:
             self.assertNotIn("realm", tool["inputSchema"].get("properties", {}))
 

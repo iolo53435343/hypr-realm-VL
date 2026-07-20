@@ -231,6 +231,8 @@ TEST_F(CRealmControlServerTest, rejectsMalformedAndAmbiguousRequestsWithStructur
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"1","method":"realm.list","unknown":true})").contains(R"("code":"parse_error")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"method":"realm.list"})").contains(R"("code":"invalid_request")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"2","method":"realm.dance"})").contains(R"("code":"method_not_found")"));
+    EXPECT_TRUE(
+        realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.open","params":{"realm":"codex"}})").contains(R"("code":"method_not_found")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.info"})").contains(R"("code":"invalid_params")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"4","method":"realm.list","params":{"realm":"codex"}})").contains(R"("code":"invalid_params")"));
 }

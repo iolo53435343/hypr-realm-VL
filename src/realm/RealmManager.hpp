@@ -72,6 +72,7 @@ namespace Realm {
 
         std::expected<SP<CRealm>, std::string> createRealm(const std::string& name);
         std::expected<void, std::string>       startRealm(uint64_t id);
+        std::expected<pid_t, std::string>      openApplication(uint64_t id, const std::string& application);
         std::expected<void, std::string>       pauseRealm(uint64_t id);
         std::expected<size_t, std::string>     pauseAllRealms();
         std::expected<void, std::string>       resumeRealm(uint64_t id);
@@ -111,6 +112,7 @@ namespace Realm {
             bool                                                 exitReceived  = false;
             bool                                                 forceKillSent = false;
             bool                                                 failOnExit    = false;
+            std::set<pid_t>                                      applicationPIDs;
         };
 
         struct SLaunchResult {
@@ -125,10 +127,12 @@ namespace Realm {
         std::expected<void, std::string>          validateName(const std::string& name) const;
         std::expected<void, std::string>          prepareRuntime(CRealm& realm);
         std::expected<SLaunchResult, std::string> launchRealmProcess(const CRealm& realm) const;
+        std::expected<void, std::string>          validateApplication(const std::string& application) const;
         std::expected<void, std::string>          cleanupRuntime(CRealm& realm);
         void                                      updateReadiness(CRealm& realm, SRealmProcess& process);
         void                                      handleProcessExit(CRealm& realm, SRealmProcess& process, int exitCode);
         void                                      finishProcessCleanup(uint64_t id, SRealmProcess& process);
+        void                                      reapApplicationProcesses(SRealmProcess& process);
         bool                                      signalProcessGroup(const SRealmProcess& process, int signal) const;
         void                                      setupPollTimer();
         void                                      emitLifecycleEvent(eRealmLifecycleEvent event, const SP<CRealm>& realm);

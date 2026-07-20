@@ -393,7 +393,12 @@ static std::expected<std::filesystem::path, std::string> createRuntimeDirectory(
     return std::unexpected("failed creating a unique realm runtime directory");
 }
 
-static std::optional<std::string> readyWaylandSocket(const CRealm& realm, pid_t compositorPID) {
+struct SRealmReadiness {
+    std::string waylandSocket;
+    std::string instanceSignature;
+};
+
+static std::optional<SRealmReadiness> realmReadiness(const CRealm& realm, pid_t compositorPID) {
     const auto      hyprDirectory = std::filesystem::path(realm.runtimeDirectory()) / "hypr";
     std::error_code error;
     if (!std::filesystem::is_directory(hyprDirectory, error))
@@ -420,7 +425,10 @@ static std::optional<std::string> readyWaylandSocket(const CRealm& realm, pid_t 
             socketPath = std::filesystem::path(realm.runtimeDirectory()) / socketPath;
 
         if (std::filesystem::is_socket(socketPath, error))
-            return socket;
+            return SRealmReadiness{
+                .waylandSocket     = std::move(socket),
+                .instanceSignature = iterator->path().filename().string(),
+            };
         error.clear();
     }
 
@@ -540,6 +548,24 @@ std::expected<void, std::string> CRealmManager::validateName(const std::string& 
     return {};
 }
 
+std::expected<void, std::string> CRealmManager::validateApplication(const std::string& application) const {
+    if (application.empty())
+        return std::unexpected("application name cannot be empty");
+    if (application.size() > 128)
+        return std::unexpected("application name cannot exceed 128 bytes");
+    if (application == "." || application == ".." || application.starts_with('-'))
+        return std::unexpected(std::format("invalid application name '{}'", application));
+
+    const auto validCharacter = [](unsigned char character) {
+        return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' ||
+            character == '.' || character == '+';
+    };
+    if (std::ranges::any_of(application, [&validCharacter](unsigned char character) { return !validCharacter(character); }))
+        return std::unexpected(std::format("invalid application name '{}': use an executable name without paths, whitespace, or shell syntax", application));
+
+    return {};
+}
+
 std::expected<SP<CRealm>, std::string> CRealmManager::createRealm(const std::string& name) {
     if (m_shuttingDown)
         return std::unexpected("realm manager is shutting down");
@@ -580,12 +606,18 @@ std::expected<void, std::string> CRealmManager::prepareRuntime(CRealm& realm) {
     realm.m_configPath       = (*runtime / "realm.lua").string();
     realm.m_logPath          = (*runtime / "realm.log").string();
     realm.m_waylandSocket.clear();
+    realm.m_instanceSignature.clear();
 
-    std::filesystem::create_directory(*runtime / "bin", error);
-    if (!error)
-        std::filesystem::create_directory(*runtime / "cache", error);
-    if (!error)
-        std::filesystem::create_directory(*runtime / "state", error);
+    static constexpr std::array<std::string_view, 3> RUNTIME_DIRECTORIES = {
+        "bin",
+        "cache",
+        "state",
+    };
+    for (const auto directory : RUNTIME_DIRECTORIES) {
+        std::filesystem::create_directory(*runtime / directory, error);
+        if (error)
+            break;
+    }
     if (error) {
         cleanupRuntime(realm);
         return std::unexpected(std::format("failed creating realm runtime structure: {}", error.message()));
@@ -729,6 +761,139 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
     }
 
     return {};
+}
+
+std::expected<pid_t, std::string> CRealmManager::openApplication(uint64_t id, const std::string& application) {
+    if (m_shuttingDown)
+        return std::unexpected("realm manager is shutting down");
+    if (const auto valid = validateApplication(application); !valid)
+        return std::unexpected(valid.error());
+
+    auto realm = realmByID(id);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", id));
+    if (realm->state() != eRealmState::RUNNING)
+        return std::unexpected(std::format("realm '{}' cannot open applications while {}", realm->name(), realmStateName(realm->state())));
+
+    const auto process = m_processes.find(id);
+    if (process == m_processes.end() || process->second.processGroupPID <= 1)
+        return std::unexpected(std::format("realm '{}' has no active process", realm->name()));
+    if (realm->waylandSocket().empty() || realm->m_instanceSignature.empty())
+        return std::unexpected(std::format("realm '{}' display is unavailable", realm->name()));
+
+    int execStatusPipe[2] = {-1, -1};
+    if (!createCloexecPipe(execStatusPipe))
+        return std::unexpected(std::format("failed creating application exec pipe: {}", strerror(errno)));
+
+    CFileDescriptor readFD{execStatusPipe[0]};
+    CFileDescriptor writeFD{execStatusPipe[1]};
+    const auto      processGroupPID = process->second.processGroupPID;
+    const auto      applicationPID  = fork();
+    if (applicationPID < 0)
+        return std::unexpected(std::format("failed forking application '{}': {}", application, strerror(errno)));
+
+    if (applicationPID == 0) {
+        readFD.reset();
+        const int statusFD = writeFD.take();
+        closeSupervisorFDsExcept(statusFD);
+
+        const auto fail = [statusFD](int error) {
+            const auto* bytes   = rc<const char*>(&error);
+            size_t      written = 0;
+            while (written < sizeof(error)) {
+                const auto result = write(statusFD, bytes + written, sizeof(error) - written);
+                if (result > 0) {
+                    written += result;
+                    continue;
+                }
+                if (result < 0 && errno == EINTR)
+                    continue;
+                break;
+            }
+            _exit(127);
+        };
+
+        sigset_t signalMask;
+        sigemptyset(&signalMask);
+        if (sigprocmask(SIG_SETMASK, &signalMask, nullptr) < 0)
+            fail(errno);
+
+        struct sigaction childAction = {};
+        childAction.sa_handler       = SIG_DFL;
+        sigemptyset(&childAction.sa_mask);
+        if (sigaction(SIGCHLD, &childAction, nullptr) < 0)
+            fail(errno);
+
+        if (setpgid(0, processGroupPID) < 0)
+            fail(errno);
+
+        const int inputFD = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (inputFD < 0 || dup2(inputFD, STDIN_FILENO) < 0)
+            fail(errno);
+        close(inputFD);
+
+        const int logFD = open(realm->logPath().c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, S_IRUSR | S_IWUSR);
+        if (logFD < 0 || dup2(logFD, STDOUT_FILENO) < 0 || dup2(logFD, STDERR_FILENO) < 0)
+            fail(errno);
+        close(logFD);
+
+        const std::vector<std::pair<std::string, std::string>> environment = {
+            {"XDG_RUNTIME_DIR", realm->runtimeDirectory()},     {"WAYLAND_DISPLAY", realm->waylandSocket()}, {"HYPRLAND_INSTANCE_SIGNATURE", realm->m_instanceSignature},
+            {"HYPRLAND_REALM_ID", std::to_string(realm->id())}, {"HYPRLAND_REALM_NAME", realm->name()},
+        };
+        for (const auto& [name, value] : environment) {
+            if (setenv(name.c_str(), value.c_str(), 1) < 0)
+                fail(errno);
+        }
+
+        static constexpr std::array<std::string_view, 3> HOST_DISPLAY_ENVIRONMENT = {
+            "DISPLAY",
+            "SWAYSOCK",
+            "WAYLAND_SOCKET",
+        };
+        for (const auto name : HOST_DISPLAY_ENVIRONMENT) {
+            if (unsetenv(name.data()) < 0)
+                fail(errno);
+        }
+
+        std::array<char*, 2> arguments = {
+            cc<char*>(application.data()),
+            nullptr,
+        };
+        execvp(arguments.front(), arguments.data());
+        fail(errno);
+    }
+
+    writeFD.reset();
+    int     execError = 0;
+    auto*   bytes     = rc<char*>(&execError);
+    size_t  readBytes = 0;
+    ssize_t result    = 0;
+    while (readBytes < sizeof(execError)) {
+        result = read(readFD.get(), bytes + readBytes, sizeof(execError) - readBytes);
+        if (result > 0) {
+            readBytes += result;
+            continue;
+        }
+        if (result < 0 && errno == EINTR)
+            continue;
+        break;
+    }
+
+    if (result < 0 || (readBytes != 0 && readBytes != sizeof(execError))) {
+        const int error = result < 0 ? errno : EIO;
+        kill(applicationPID, SIGKILL);
+        waitpid(applicationPID, nullptr, 0);
+        return std::unexpected(std::format("failed reading application '{}' exec status: {}", application, strerror(error)));
+    }
+
+    if (readBytes == sizeof(execError)) {
+        waitpid(applicationPID, nullptr, 0);
+        return std::unexpected(std::format("failed executing application '{}': {}", application, strerror(execError)));
+    }
+
+    process->second.applicationPIDs.emplace(applicationPID);
+    return applicationPID;
 }
 
 bool CRealmManager::signalProcessGroup(const SRealmProcess& process, int signal) const {
@@ -960,8 +1125,9 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
     if (realm.state() != eRealmState::CREATING || realm.compositorPID() <= 1)
         return;
 
-    if (const auto socket = readyWaylandSocket(realm, realm.compositorPID()); socket) {
-        realm.m_waylandSocket = *socket;
+    if (const auto readiness = realmReadiness(realm, realm.compositorPID()); readiness) {
+        realm.m_waylandSocket     = readiness->waylandSocket;
+        realm.m_instanceSignature = readiness->instanceSignature;
         if (realm.transitionTo(eRealmState::RUNNING)) {
             const auto realmPointer = realmByID(realm.id());
             setInputOwner(realmPointer, eRealmInputOwner::AGENT);
@@ -982,6 +1148,14 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
         emitLifecycleEvent(eRealmLifecycleEvent::FAILED, realmPointer);
     }
     signalProcessGroup(process, SIGTERM);
+}
+
+void CRealmManager::reapApplicationProcesses(SRealmProcess& process) {
+    std::erase_if(process.applicationPIDs, [](pid_t pid) {
+        int        status = 0;
+        const auto waited = waitpid(pid, &status, WNOHANG);
+        return waited == pid || (waited < 0 && errno == ECHILD);
+    });
 }
 
 void CRealmManager::finishProcessCleanup(uint64_t id, SRealmProcess& process) {
@@ -1022,7 +1196,8 @@ void CRealmManager::dispatchPendingEvents() {
             continue;
         }
 
-        auto&                                            process = processIterator->second;
+        auto& process = processIterator->second;
+        reapApplicationProcesses(process);
         std::array<char, sizeof(SSupervisorMessage) * 4> buffer;
         bool                                             reachedEOF = false;
 
@@ -1085,6 +1260,7 @@ std::expected<void, std::string> CRealmManager::cleanupRuntime(CRealm& realm) {
     m_ownedRuntimeDirectories.erase(owned);
     realm.m_runtimeDirectory.clear();
     realm.m_waylandSocket.clear();
+    realm.m_instanceSignature.clear();
     realm.m_configPath.clear();
     realm.m_logPath.clear();
     return {};

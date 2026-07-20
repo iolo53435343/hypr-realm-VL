@@ -761,6 +761,7 @@ if(BUILD_TESTING OR WITH_TESTS)
   include(GoogleTest)
   file(GLOB_RECURSE TESTFILES "tests/*.cpp")
   add_executable(realm_process_helper tests/realm/RealmProcessHelper.cc)
+  add_executable(realm_application_helper tests/realm/RealmApplicationHelper.cc)
   add_executable(
     realm_input_controller_process_helper
     tests/realm/RealmInputControllerProcessHelper.cc
@@ -768,11 +769,12 @@ if(BUILD_TESTING OR WITH_TESTS)
   target_include_directories(realm_input_controller_process_helper
                              PRIVATE "./src")
   add_executable(hyprland_gtests ${TESTFILES})
-  add_dependencies(hyprland_gtests realm_process_helper
+  add_dependencies(hyprland_gtests realm_application_helper realm_process_helper
                    realm_input_controller_process_helper)
   target_compile_definitions(
     hyprland_gtests
     PRIVATE
+      REALM_APPLICATION_HELPER_PATH="$<TARGET_FILE:realm_application_helper>"
       REALM_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_process_helper>"
       REALM_INPUT_CONTROLLER_PROCESS_HELPER_PATH="$<TARGET_FILE:realm_input_controller_process_helper>")
   target_compile_options(hyprland_gtests PRIVATE --coverage)

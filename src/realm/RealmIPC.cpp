@@ -63,11 +63,13 @@ struct SParsedRealmCommand {
     std::string                action;
     std::string                name;
     std::optional<std::string> capability;
+    std::optional<std::string> application;
 };
 
 static std::expected<SParsedRealmCommand, std::string> parseRealmCommand(const std::string& request) {
     if (request == "realm")
-        return std::unexpected("usage: hyprctl realm <create|start|pause|resume|stop|kill|takeover|release|observe|unobserve|grant|revoke|destroy|info> <name> [capability]");
+        return std::unexpected(
+            "usage: hyprctl realm <create|start|open|pause|resume|stop|kill|takeover|release|observe|unobserve|grant|revoke|destroy|info> <name> [application|capability]");
     if (!request.starts_with("realm "))
         return std::unexpected("invalid realm request");
 
@@ -82,6 +84,7 @@ static std::expected<SParsedRealmCommand, std::string> parseRealmCommand(const s
         return std::unexpected(std::format("realm action '{}' requires a name", action));
 
     std::optional<std::string> capability;
+    std::optional<std::string> application;
     if (action == "grant" || action == "revoke") {
         const auto capabilitySeparator = name.rfind(' ');
         if (capabilitySeparator == std::string::npos)
@@ -90,9 +93,22 @@ static std::expected<SParsedRealmCommand, std::string> parseRealmCommand(const s
         name       = trim(name.substr(0, capabilitySeparator));
         if (name.empty() || capability->empty())
             return std::unexpected(std::format("realm action '{}' requires a name and capability", action));
+    } else if (action == "open") {
+        const auto applicationSeparator = name.rfind(' ');
+        if (applicationSeparator == std::string::npos)
+            return std::unexpected("realm action 'open' requires a name and application");
+        application = trim(name.substr(applicationSeparator + 1));
+        name        = trim(name.substr(0, applicationSeparator));
+        if (name.empty() || application->empty())
+            return std::unexpected("realm action 'open' requires a name and application");
     }
 
-    return SParsedRealmCommand{.action = std::move(action), .name = std::move(name), .capability = std::move(capability)};
+    return SParsedRealmCommand{
+        .action      = std::move(action),
+        .name        = std::move(name),
+        .capability  = std::move(capability),
+        .application = std::move(application),
+    };
 }
 
 std::string Realm::realmListRequest(CRealmManager& manager, eHyprCtlOutputFormat format) {
@@ -134,7 +150,7 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
         return successResponse(format, "created", *created);
     }
 
-    if (action != "start" && action != "pause" && action != "resume" && action != "stop" && action != "kill" && action != "takeover" && action != "release" &&
+    if (action != "start" && action != "open" && action != "pause" && action != "resume" && action != "stop" && action != "kill" && action != "takeover" && action != "release" &&
         action != "observe" && action != "unobserve" && action != "grant" && action != "revoke" && action != "destroy" && action != "info")
         return errorResponse(format, std::format("unknown realm action '{}'", action));
 
@@ -152,6 +168,14 @@ std::string Realm::realmCommandRequest(CRealmManager& manager, CRealmWindowManag
 
     if (action == "info")
         return format == FORMAT_JSON ? realmJSON(*realm) : realmText(*realm);
+    if (action == "open") {
+        auto opened = manager.openApplication(realm->id(), *parsed->application);
+        if (!opened)
+            return errorResponse(format, opened.error());
+        if (format == FORMAT_JSON)
+            return std::format(R"({{"ok":true,"action":"opened","application":"{}","pid":{},"realm":{}}})", escapeJSONStrings(*parsed->application), *opened, realmJSON(*realm));
+        return std::format("opened application '{}' (PID {}) in realm '{}' ({})", *parsed->application, *opened, realm->name(), realm->id());
+    }
 
     std::expected<void, std::string> result;
     std::string                      responseAction;
