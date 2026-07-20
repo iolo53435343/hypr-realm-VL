@@ -104,6 +104,13 @@ in
   # including forked or patched packages for compatibility.
   hyprland-extras = lib.composeManyExtensions [
     inputs.xdph.overlays.default
+
+    # Prevent XDPH from spinning after its compositor connection disappears.
+    (_final: prev: {
+      xdg-desktop-portal-hyprland = prev.xdg-desktop-portal-hyprland.overrideAttrs (oldAttrs: {
+        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/xdph-handle-disconnected-poll-fds.patch ];
+      });
+    })
   ];
 
   # udis86 from nixpkgs is too old, and also does not provide a .pc file

@@ -1,0 +1,69 @@
+diff --git a/contrib/systemd/xdg-desktop-portal-hyprland.service.in b/contrib/systemd/xdg-desktop-portal-hyprland.service.in
+--- a/contrib/systemd/xdg-desktop-portal-hyprland.service.in
++++ b/contrib/systemd/xdg-desktop-portal-hyprland.service.in
+@@ -11 +11,2 @@
+-Restart=on-failure
++Restart=always
++RestartSec=1s
+diff --git a/src/core/PortalManager.cpp b/src/core/PortalManager.cpp
+--- a/src/core/PortalManager.cpp
++++ b/src/core/PortalManager.cpp
+@@ -347 +346,0 @@
+-
+@@ -349,0 +349,3 @@
++                if (errno == EINTR)
++                    continue;
++
+@@ -351,0 +354 @@
++                break;
+@@ -354,5 +357,10 @@
+-            for (size_t i = 0; i < 3; ++i) {
+-                if (m_sEventLoopInternals.pollFds.data()->revents & POLLHUP) {
+-                    Debug::log(CRIT, "[core] Disconnected from pollfd id {}", i);
+-                    g_pPortalManager->terminate();
+-                }
++            constexpr size_t CORE_FD_COUNT = 3;
++            const auto       POLLFD_COUNT  = std::min(CORE_FD_COUNT, m_sEventLoopInternals.pollFds.size());
++            for (size_t i = 0; i < POLLFD_COUNT; ++i) {
++                const auto REVENTS = m_sEventLoopInternals.pollFds[i].revents;
++                if (!(REVENTS & (POLLHUP | POLLERR | POLLNVAL)))
++                    continue;
++
++                Debug::log(CRIT, "[core] Disconnected from pollfd id {} (revents: {:#x})", i, REVENTS);
++                g_pPortalManager->terminate();
++                break;
+@@ -479,0 +488,4 @@
++    if (m_sTimersThread.thread && m_sTimersThread.thread->joinable())
++        m_sTimersThread.thread->join();
++    pollThr.join();
++
+@@ -483 +494,0 @@
+-    m_sHelpers.toplevel.reset();
+@@ -484,0 +496,10 @@
++    m_sHelpers.toplevel.reset();
++    m_sHelpers.toplevelMapping.reset();
++
++    m_vOutputs.clear();
++    m_sWaylandConnection.linuxDmabufFeedback.reset();
++    m_sWaylandConnection.linuxDmabuf.reset();
++    m_sWaylandConnection.hyprlandToplevelMgr.reset();
++    m_sWaylandConnection.xdgOutputManager.reset();
++    m_sWaylandConnection.shm.reset();
++    m_sWaylandConnection.registry.reset();
+@@ -489,3 +509,0 @@
+-
+-    m_sTimersThread.thread.release();
+-    pollThr.join(); // wait for poll to exit
+diff --git a/src/core/PortalManager.hpp b/src/core/PortalManager.hpp
+--- a/src/core/PortalManager.hpp
++++ b/src/core/PortalManager.hpp
+@@ -125,2 +125,2 @@
+-    void  startEventLoop();
+-    void  setupXDGOutput(SOutput* output);
++    void              startEventLoop();
++    void              setupXDGOutput(SOutput* output);
+@@ -128,2 +128,2 @@
+-    bool  m_bTerminate = false;
+-    pid_t m_iPID       = 0;
++    std::atomic<bool> m_bTerminate = false;
++    pid_t             m_iPID       = 0;
