@@ -125,6 +125,7 @@ customStdenv.mkDerivation (finalAttrs: {
             ../src
             ../start
             ../systemd
+            ../tools
             ../VERSION
             (fs.fileFilter (file: file.hasExt "1") ../docs)
             (fs.fileFilter (file: file.hasExt "conf" || file.hasExt "in" || file.hasExt "lua" ) ../example)
@@ -166,6 +167,7 @@ customStdenv.mkDerivation (finalAttrs: {
     cmake
     pkg-config
     python3
+    wayland-scanner
   ];
 
   outputs = [
