@@ -30,6 +30,14 @@
 using namespace Hyprutils::OS;
 using namespace Realm;
 
+TEST(RealmInputControllerDefaults, permitsResponsiveCapturePollingWithoutRemovingBounds) {
+    const SRealmInputControllerOptions options;
+    EXPECT_EQ(options.captureRatePerSecond, 12);
+    EXPECT_EQ(options.captureBurst, 4);
+    EXPECT_EQ(options.ratePerSecond, 256);
+    EXPECT_EQ(options.burst, 512);
+}
+
 static bool waitForControlState(CRealmManager& manager, const SP<CRealm>& realm, eRealmState state) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < deadline) {
@@ -231,8 +239,7 @@ TEST_F(CRealmControlServerTest, rejectsMalformedAndAmbiguousRequestsWithStructur
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"1","method":"realm.list","unknown":true})").contains(R"("code":"parse_error")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"method":"realm.list"})").contains(R"("code":"invalid_request")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"2","method":"realm.dance"})").contains(R"("code":"method_not_found")"));
-    EXPECT_TRUE(
-        realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.open","params":{"realm":"codex"}})").contains(R"("code":"method_not_found")"));
+    EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.open","params":{"realm":"codex"}})").contains(R"("code":"invalid_params")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.info"})").contains(R"("code":"invalid_params")"));
     EXPECT_TRUE(realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"4","method":"realm.list","params":{"realm":"codex"}})").contains(R"("code":"invalid_params")"));
 }
@@ -247,11 +254,25 @@ TEST_F(CRealmControlServerTest, exposesEveryInitialRealmMethod) {
     response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"3","method":"realm.info","params":{"realm":"codex"}})");
     EXPECT_TRUE(response.contains(R"("realm":{"id":1,"name":"codex")"));
 
+    response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"place","method":"realm.place","params":{"realm":"codex","workspace":5}})");
+    EXPECT_TRUE(response.contains(R"("action":"placed")")) << response;
+    EXPECT_EQ(m_windowManager->requestedWorkspace(1), 5);
+    response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"placed-list","method":"realm.list"})");
+    EXPECT_TRUE(response.contains(R"("workspace":5)")) << response;
+    response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"placed-info","method":"realm.info","params":{"realm":"codex"}})");
+    EXPECT_TRUE(response.contains(R"("workspace":5)")) << response;
+    response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"grant","method":"realm.grant","params":{"realm":"codex","capability":"pointer"}})");
+    EXPECT_TRUE(response.contains(R"("action":"granted pointer capability")")) << response;
+
     response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"4","method":"realm.start","params":{"realm":"codex"}})");
     EXPECT_TRUE(response.contains(R"("action":"starting")"));
     const auto realm = m_manager->realmByName("codex");
     ASSERT_TRUE(realm);
     ASSERT_TRUE(waitForControlState(*m_manager, realm, eRealmState::RUNNING));
+
+    response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"open","method":"realm.open","params":{"realm":"codex","application":"true"}})");
+    EXPECT_TRUE(response.contains(R"("action":"opened")")) << response;
+    EXPECT_TRUE(response.contains(R"("application":"true")"));
 
     ASSERT_TRUE(m_windowManager->associateWindow(42, realm->compositorPID()));
     response = realmControlRequest(*m_manager, *m_windowManager, R"({"request_id":"5","method":"realm.takeover","params":{"realm":"codex"}})");
@@ -375,9 +396,9 @@ TEST_F(CRealmControlServerTest, capturesRealmFramesThroughSharedMemoryWithIndepe
     response =
         realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"self-grant-denied","method":"realm.observe","params":{"realm":"capture"}})");
     EXPECT_TRUE(response.contains(R"("code":"capability_denied")"));
-    EXPECT_TRUE(
-        realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"no-private-grant","method":"realm.grant","params":{"realm":"capture"}})")
-            .contains(R"("code":"method_not_found")"));
+    response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(),
+                                   R"({"request_id":"demo-grant","method":"realm.grant","params":{"realm":"capture","capability":"pointer"}})");
+    EXPECT_TRUE(response.contains(R"("ok":true)")) << response;
 
     ASSERT_TRUE(m_manager->grantCapability(realm->id(), eRealmCapability::OBSERVE));
     response = realmControlRequest(*m_manager, *m_windowManager, m_inputController.get(), R"({"request_id":"denied","method":"realm.capture","params":{"realm":"capture"}})");

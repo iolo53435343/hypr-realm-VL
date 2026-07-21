@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RealmManager.hpp"
+#include "../desktop/DesktopTypes.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -24,6 +25,8 @@ namespace Realm {
         void                                   dissociateWindow(uint64_t windowID);
         SP<CRealm>                             realmForWindow(uint64_t windowID) const;
         std::optional<uint64_t>                windowForRealm(uint64_t realmID) const;
+        std::expected<void, std::string>       placeRealm(uint64_t realmID, int64_t workspaceID);
+        std::optional<int64_t>                 requestedWorkspace(uint64_t realmID) const;
         std::expected<void, std::string>       handleCloseRequest(uint64_t windowID);
         std::expected<void, std::string>       takeoverRealm(uint64_t realmID);
         std::expected<void, std::string>       releaseRealm(uint64_t realmID);
@@ -35,6 +38,7 @@ namespace Realm {
         void           updateWindowDecoration(const SP<CRealm>& realm);
         void           updateWindowANRSuppression(const SP<CRealm>& realm);
         void           updateHostCursorVisibility(const Hyprutils::Math::Vector2D& position);
+        void           applyRequestedWorkspace(uint64_t realmID, const PHLWINDOW& window);
         void           handleDecorationAction(uint64_t realmID, eRealmDecorationAction action);
 
         CRealmManager& m_manager;

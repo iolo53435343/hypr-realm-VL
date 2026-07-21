@@ -43,8 +43,8 @@ namespace Realm {
         std::chrono::milliseconds startupTimeout         = std::chrono::seconds(5);
         std::chrono::milliseconds inputTimeout           = std::chrono::seconds(2);
         std::chrono::milliseconds captureTimeout         = std::chrono::seconds(3);
-        size_t                    captureRatePerSecond   = 4;
-        size_t                    captureBurst           = 2;
+        size_t                    captureRatePerSecond   = 12;
+        size_t                    captureBurst           = 4;
         bool                      integrateWithEventLoop = true;
     };
 

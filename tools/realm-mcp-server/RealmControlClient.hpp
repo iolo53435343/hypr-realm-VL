@@ -29,31 +29,33 @@ namespace Realm::MCP {
 
     class CRealmControlClient {
       public:
-        CRealmControlClient(std::filesystem::path socketPath, std::string realm);
+        explicit CRealmControlClient(std::filesystem::path socketPath);
 
         static std::expected<std::filesystem::path, std::string> discoverSocketPath();
 
         std::expected<void, std::string>                         connect();
-        std::expected<std::string, std::string>                  realmInfo();
-        std::expected<std::string, std::string>                  createRealm();
-        std::expected<std::string, std::string>                  startRealm();
-        std::expected<std::string, std::string>                  pauseRealm();
-        std::expected<std::string, std::string>                  resumeRealm();
-        std::expected<std::string, std::string>                  stopRealm();
-        std::expected<std::string, std::string>                  allowObservation();
-        std::expected<std::string, std::string>                  denyObservation();
-        std::expected<SCaptureFrame, std::string>                capture(std::optional<SCaptureRegion> region);
-        std::expected<std::string, std::string>                  movePointer(uint32_t x, uint32_t y);
-        std::expected<std::string, std::string>                  pointAndClick(uint32_t x, uint32_t y, std::string_view button, uint32_t count);
-        std::expected<std::string, std::string>                  clickPointer(std::string_view button);
-        std::expected<std::string, std::string>                  scrollPointer(std::string_view axis, int32_t steps);
-        std::expected<std::string, std::string>                  pressKey(uint32_t keycode);
-        std::expected<std::string, std::string>                  pressShortcut(const std::vector<uint32_t>& keycodes);
-        std::expected<std::string, std::string>                  typeText(std::string_view text);
-
-        const std::string&                                       realm() const;
-        uint32_t                                                 coordinateWidth() const;
-        uint32_t                                                 coordinateHeight() const;
+        std::expected<std::string, std::string>                  listRealms();
+        std::expected<std::string, std::string>                  realmInfo(std::string_view realm);
+        std::expected<std::string, std::string>                  createRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  startRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  pauseRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  resumeRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  stopRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  destroyRealm(std::string_view realm);
+        std::expected<std::string, std::string>                  grantCapability(std::string_view realm, std::string_view capability);
+        std::expected<std::string, std::string>                  openApplication(std::string_view realm, std::string_view application);
+        std::expected<std::string, std::string>                  placeRealm(std::string_view realm, int64_t workspace);
+        std::expected<std::string, std::string>                  allowObservation(std::string_view realm);
+        std::expected<std::string, std::string>                  denyObservation(std::string_view realm);
+        std::expected<SCaptureFrame, std::string>                capture(std::string_view realm, std::optional<SCaptureRegion> region);
+        std::expected<std::string, std::string>                  movePointer(std::string_view realm, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
+        std::expected<std::string, std::string> pointAndClick(std::string_view realm, uint32_t x, uint32_t y, uint32_t width, uint32_t height, std::string_view button,
+                                                              uint32_t count);
+        std::expected<std::string, std::string> clickPointer(std::string_view realm, std::string_view button);
+        std::expected<std::string, std::string> scrollPointer(std::string_view realm, std::string_view axis, int32_t steps);
+        std::expected<std::string, std::string> pressKey(std::string_view realm, uint32_t keycode);
+        std::expected<std::string, std::string> pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes);
+        std::expected<std::string, std::string> typeText(std::string_view realm, std::string_view text);
 
       private:
         struct SControlPacket {
@@ -61,17 +63,14 @@ namespace Realm::MCP {
             Hyprutils::OS::CFileDescriptor descriptor;
         };
 
-        std::expected<std::string, std::string>    request(std::string_view method, std::string_view extraParameters = {});
-        std::expected<std::string, std::string>    input(std::string_view method, std::string_view extraParameters);
+        std::expected<std::string, std::string>    request(std::string_view method, std::optional<std::string_view> realm, std::string_view extraParameters = {});
+        std::expected<std::string, std::string>    input(std::string_view realm, std::string_view method, std::string_view extraParameters);
         std::expected<SControlPacket, std::string> readPacket();
         std::expected<void, std::string>           readExact(void* data, size_t size, Hyprutils::OS::CFileDescriptor& descriptor);
         std::expected<void, std::string>           writeAll(std::string_view data);
 
         std::filesystem::path                      m_socketPath;
-        std::string                                m_realm;
         Hyprutils::OS::CFileDescriptor             m_socket;
-        uint64_t                                   m_nextRequestID    = 1;
-        uint32_t                                   m_coordinateWidth  = 1280;
-        uint32_t                                   m_coordinateHeight = 720;
+        uint64_t                                   m_nextRequestID = 1;
     };
 }

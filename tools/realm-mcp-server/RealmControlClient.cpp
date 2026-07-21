@@ -95,7 +95,7 @@ static std::expected<void, std::string> waitForDescriptor(int descriptor, short 
     }
 }
 
-CRealmControlClient::CRealmControlClient(std::filesystem::path socketPath, std::string realm) : m_socketPath(std::move(socketPath)), m_realm(std::move(realm)) {}
+CRealmControlClient::CRealmControlClient(std::filesystem::path socketPath) : m_socketPath(std::move(socketPath)) {}
 
 std::expected<std::filesystem::path, std::string> CRealmControlClient::discoverSocketPath() {
     const auto* runtime   = getenv("XDG_RUNTIME_DIR");
@@ -254,12 +254,13 @@ std::expected<CRealmControlClient::SControlPacket, std::string> CRealmControlCli
     return SControlPacket{.json = std::move(payload), .descriptor = std::move(descriptor)};
 }
 
-std::expected<std::string, std::string> CRealmControlClient::request(std::string_view method, std::string_view extraParameters) {
+std::expected<std::string, std::string> CRealmControlClient::request(std::string_view method, std::optional<std::string_view> realm, std::string_view extraParameters) {
     if (auto connected = connect(); !connected)
         return std::unexpected(connected.error());
 
     const auto requestID = std::to_string(m_nextRequestID++);
-    auto       payload   = std::format(R"({{"request_id":"{}","method":{},"params":{{"realm":{}}}}})", requestID, quoteJSON(method), quoteJSON(m_realm));
+    auto       payload   = realm ? std::format(R"({{"request_id":"{}","method":{},"params":{{"realm":{}}}}})", requestID, quoteJSON(method), quoteJSON(*realm)) :
+                                   std::format(R"({{"request_id":"{}","method":{},"params":{{}}}})", requestID, quoteJSON(method));
     if (!extraParameters.empty())
         payload.insert(payload.size() - 2, std::format(",{}", extraParameters));
     if (payload.size() > MAX_CONTROL_MESSAGE_SIZE)
@@ -297,13 +298,17 @@ std::expected<std::string, std::string> CRealmControlClient::request(std::string
     return response.result->str;
 }
 
-std::expected<std::string, std::string> CRealmControlClient::realmInfo() {
-    return request("realm.info");
+std::expected<std::string, std::string> CRealmControlClient::listRealms() {
+    return request("realm.list", std::nullopt);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::input(std::string_view method, std::string_view extraParameters) {
+std::expected<std::string, std::string> CRealmControlClient::realmInfo(std::string_view realm) {
+    return request("realm.info", realm);
+}
+
+std::expected<std::string, std::string> CRealmControlClient::input(std::string_view realm, std::string_view method, std::string_view extraParameters) {
     const auto started = std::chrono::steady_clock::now();
-    auto       queued  = request(method, extraParameters);
+    auto       queued  = request(method, realm, extraParameters);
     if (!queued)
         return std::unexpected(queued.error());
 
@@ -326,42 +331,58 @@ std::expected<std::string, std::string> CRealmControlClient::input(std::string_v
         if (event.event != "realm.input.applied")
             return std::unexpected("realm control input event is incomplete");
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
-        return std::format(R"({{"action":"applied","sequence":{},"elapsed_ms":{},"realm_name":{}}})", *queuedInput.sequence, elapsed, quoteJSON(m_realm));
+        return std::format(R"({{"action":"applied","sequence":{},"elapsed_ms":{},"realm_name":{}}})", *queuedInput.sequence, elapsed, quoteJSON(realm));
     }
     return std::unexpected("too many unmatched realm control events while waiting for input completion");
 }
 
-std::expected<std::string, std::string> CRealmControlClient::createRealm() {
-    return request("realm.create");
+std::expected<std::string, std::string> CRealmControlClient::createRealm(std::string_view realm) {
+    return request("realm.create", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::startRealm() {
-    return request("realm.start");
+std::expected<std::string, std::string> CRealmControlClient::startRealm(std::string_view realm) {
+    return request("realm.start", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::pauseRealm() {
-    return request("realm.pause");
+std::expected<std::string, std::string> CRealmControlClient::pauseRealm(std::string_view realm) {
+    return request("realm.pause", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::resumeRealm() {
-    return request("realm.resume");
+std::expected<std::string, std::string> CRealmControlClient::resumeRealm(std::string_view realm) {
+    return request("realm.resume", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::stopRealm() {
-    return request("realm.stop");
+std::expected<std::string, std::string> CRealmControlClient::stopRealm(std::string_view realm) {
+    return request("realm.stop", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::allowObservation() {
-    return request("realm.observe");
+std::expected<std::string, std::string> CRealmControlClient::destroyRealm(std::string_view realm) {
+    return request("realm.destroy", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::denyObservation() {
-    return request("realm.unobserve");
+std::expected<std::string, std::string> CRealmControlClient::grantCapability(std::string_view realm, std::string_view capability) {
+    return request("realm.grant", realm, std::format(R"("capability":{})", quoteJSON(capability)));
 }
 
-std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::optional<SCaptureRegion> region) {
-    auto queued = region ? request("realm.capture_region", std::format(R"("x":{},"y":{},"width":{},"height":{})", region->x, region->y, region->width, region->height)) :
-                           request("realm.capture");
+std::expected<std::string, std::string> CRealmControlClient::openApplication(std::string_view realm, std::string_view application) {
+    return request("realm.open", realm, std::format(R"("application":{})", quoteJSON(application)));
+}
+
+std::expected<std::string, std::string> CRealmControlClient::placeRealm(std::string_view realm, int64_t workspace) {
+    return request("realm.place", realm, std::format(R"("workspace":{})", workspace));
+}
+
+std::expected<std::string, std::string> CRealmControlClient::allowObservation(std::string_view realm) {
+    return request("realm.observe", realm);
+}
+
+std::expected<std::string, std::string> CRealmControlClient::denyObservation(std::string_view realm) {
+    return request("realm.unobserve", realm);
+}
+
+std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::string_view realm, std::optional<SCaptureRegion> region) {
+    auto queued = region ? request("realm.capture_region", realm, std::format(R"("x":{},"y":{},"width":{},"height":{})", region->x, region->y, region->width, region->height)) :
+                           request("realm.capture", realm);
     if (!queued)
         return std::unexpected(queued.error());
 
@@ -427,58 +448,42 @@ std::expected<SCaptureFrame, std::string> CRealmControlClient::capture(std::opti
                 return std::unexpected(size == 0 ? "realm capture ended before its declared size" : std::format("failed reading realm capture: {}", strerror(errno)));
             offset += static_cast<size_t>(size);
         }
-        if (!region) {
-            m_coordinateWidth  = captured.width;
-            m_coordinateHeight = captured.height;
-        }
         return captured;
     }
     return std::unexpected("too many unmatched realm control events while waiting for a capture");
 }
 
-std::expected<std::string, std::string> CRealmControlClient::movePointer(uint32_t x, uint32_t y) {
-    return input("pointer.move", std::format(R"("x":{},"y":{},"width":{},"height":{})", x, y, m_coordinateWidth, m_coordinateHeight));
+std::expected<std::string, std::string> CRealmControlClient::movePointer(std::string_view realm, uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
+    return input(realm, "pointer.move", std::format(R"("x":{},"y":{},"width":{},"height":{})", x, y, width, height));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::pointAndClick(uint32_t x, uint32_t y, std::string_view button, uint32_t count) {
-    return input("pointer.point_and_click",
-                 std::format(R"("x":{},"y":{},"width":{},"height":{},"button":{},"count":{})", x, y, m_coordinateWidth, m_coordinateHeight, quoteJSON(button), count));
+std::expected<std::string, std::string> CRealmControlClient::pointAndClick(std::string_view realm, uint32_t x, uint32_t y, uint32_t width, uint32_t height, std::string_view button,
+                                                                           uint32_t count) {
+    return input(realm, "pointer.point_and_click", std::format(R"("x":{},"y":{},"width":{},"height":{},"button":{},"count":{})", x, y, width, height, quoteJSON(button), count));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::clickPointer(std::string_view button) {
-    return input("pointer.click", std::format(R"("button":{})", quoteJSON(button)));
+std::expected<std::string, std::string> CRealmControlClient::clickPointer(std::string_view realm, std::string_view button) {
+    return input(realm, "pointer.click", std::format(R"("button":{})", quoteJSON(button)));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::scrollPointer(std::string_view axis, int32_t steps) {
-    return input("pointer.scroll", std::format(R"("axis":{},"steps":{})", quoteJSON(axis), steps));
+std::expected<std::string, std::string> CRealmControlClient::scrollPointer(std::string_view realm, std::string_view axis, int32_t steps) {
+    return input(realm, "pointer.scroll", std::format(R"("axis":{},"steps":{})", quoteJSON(axis), steps));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::pressKey(uint32_t keycode) {
-    return input("keyboard.press", std::format(R"("keycode":{})", keycode));
+std::expected<std::string, std::string> CRealmControlClient::pressKey(std::string_view realm, uint32_t keycode) {
+    return input(realm, "keyboard.press", std::format(R"("keycode":{})", keycode));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::pressShortcut(const std::vector<uint32_t>& keycodes) {
+std::expected<std::string, std::string> CRealmControlClient::pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes) {
     std::string encoded;
     for (const auto keycode : keycodes) {
         if (!encoded.empty())
             encoded += ',';
         encoded += std::to_string(keycode);
     }
-    return input("keyboard.shortcut", std::format(R"("keycodes":[{}])", encoded));
+    return input(realm, "keyboard.shortcut", std::format(R"("keycodes":[{}])", encoded));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::typeText(std::string_view text) {
-    return input("keyboard.type", std::format(R"("text":{})", quoteJSON(text)));
-}
-
-const std::string& CRealmControlClient::realm() const {
-    return m_realm;
-}
-
-uint32_t CRealmControlClient::coordinateWidth() const {
-    return m_coordinateWidth;
-}
-
-uint32_t CRealmControlClient::coordinateHeight() const {
-    return m_coordinateHeight;
+std::expected<std::string, std::string> CRealmControlClient::typeText(std::string_view realm, std::string_view text) {
+    return input(realm, "keyboard.type", std::format(R"("text":{})", quoteJSON(text)));
 }

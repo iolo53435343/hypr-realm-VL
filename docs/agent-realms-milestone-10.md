@@ -1,5 +1,9 @@
 # Agent Realms: Milestone 10
 
+> Milestone 13 changes the no-argument default into a dynamic demo
+> orchestrator. The one-adapter/one-realm contract below remains available as
+> compatibility mode through `--realm NAME`.
+
 Milestone 10 adds a separate MCP stdio adapter named
 `hyprland-realm-mcp-server`. It gives an MCP client typed realm tools without
 embedding an MCP implementation in the compositor or exposing the host

@@ -81,6 +81,17 @@ TEST_F(CRealmWindowManagerTest, associatesHostWindowByCompositorPID) {
     EXPECT_FALSE(m_windowManager->windowForRealm(realm->id()));
 }
 
+TEST_F(CRealmWindowManagerTest, remembersRequestedWorkspaceBeforeHostWindowOpens) {
+    const auto realm = startRealm("workspace");
+    ASSERT_TRUE(realm);
+
+    EXPECT_FALSE(m_windowManager->requestedWorkspace(realm->id()));
+    ASSERT_TRUE(m_windowManager->placeRealm(realm->id(), 5));
+    EXPECT_EQ(m_windowManager->requestedWorkspace(realm->id()), 5);
+    EXPECT_FALSE(m_windowManager->placeRealm(realm->id(), 0));
+    EXPECT_FALSE(m_windowManager->placeRealm(9999, 5));
+}
+
 TEST_F(CRealmWindowManagerTest, rejectsUnknownProcessesAndConflictingAssociations) {
     const auto first  = startRealm("first");
     const auto second = startRealm("second");

@@ -52,6 +52,9 @@ struct SRealmControlParams {
     std::optional<uint32_t>              count;
     std::optional<bool>                  pressed;
     std::optional<std::string>           text;
+    std::optional<std::string>           application;
+    std::optional<std::string>           capability;
+    std::optional<int64_t>               workspace;
 };
 
 struct SRealmControlRequest {
@@ -95,16 +98,35 @@ static std::string realmResult(std::string_view action, const SP<CRealm>& realm)
     return std::format(R"({{"action":"{}","realm":{}}})", action, realmJSON(*realm));
 }
 
+static std::string realmControlJSON(const SP<CRealm>& realm, const CRealmWindowManager& windowManager) {
+    auto       encoded   = realmJSON(*realm);
+    const auto workspace = windowManager.requestedWorkspace(realm->id());
+    encoded.insert(encoded.size() - 1, workspace ? std::format(R"(,"workspace":{})", *workspace) : R"(,"workspace":null)");
+    return encoded;
+}
+
+static std::string realmControlListJSON(const CRealmManager& manager, const CRealmWindowManager& windowManager) {
+    std::string encoded = "[";
+    for (const auto& realm : manager.realms()) {
+        if (encoded.size() > 1)
+            encoded += ',';
+        encoded += realmControlJSON(realm, windowManager);
+    }
+    encoded += ']';
+    return encoded;
+}
+
 static bool hasAutomationParameters(const SRealmControlParams& params) {
     return params.x || params.y || params.width || params.height || params.button || params.axis || params.steps || params.keycode || params.keycodes || params.count ||
-        params.pressed || params.text;
+        params.pressed || params.text || params.application || params.capability || params.workspace;
 }
 
 static bool onlyRealmAnd(const SRealmControlParams& params, std::initializer_list<std::string_view> fields) {
     const auto contains = [&fields](std::string_view field) { return std::ranges::find(fields, field) != fields.end(); };
     return (!params.x || contains("x")) && (!params.y || contains("y")) && (!params.width || contains("width")) && (!params.height || contains("height")) &&
         (!params.button || contains("button")) && (!params.axis || contains("axis")) && (!params.steps || contains("steps")) && (!params.keycode || contains("keycode")) &&
-        (!params.keycodes || contains("keycodes")) && (!params.count || contains("count")) && (!params.pressed || contains("pressed")) && (!params.text || contains("text"));
+        (!params.keycodes || contains("keycodes")) && (!params.count || contains("count")) && (!params.pressed || contains("pressed")) && (!params.text || contains("text")) &&
+        (!params.application || contains("application")) && (!params.capability || contains("capability")) && (!params.workspace || contains("workspace"));
 }
 
 static std::string inputResult(uint32_t sequence, const SP<CRealm>& realm) {
@@ -295,32 +317,15 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
     if (method == "realm.list") {
         if (request.params && (request.params->realm || hasAutomationParameters(*request.params)))
             return controlError(request.request_id, "invalid_params", "realm.list does not accept parameters");
-        return controlSuccess(*request.request_id, std::format(R"({{"realms":{}}})", realmListRequest(manager, FORMAT_JSON)));
+        return controlSuccess(*request.request_id, std::format(R"({{"realms":{}}})", realmControlListJSON(manager, windowManager)));
     }
 
-    constexpr std::array<std::string_view, 22> REALM_METHODS = {
-        "realm.info",
-        "realm.create",
-        "realm.start",
-        "realm.pause",
-        "realm.resume",
-        "realm.stop",
-        "realm.destroy",
-        "realm.takeover",
-        "realm.release",
-        "realm.observe",
-        "realm.unobserve",
-        "realm.capture",
-        "realm.capture_region",
-        "pointer.move",
-        "pointer.button",
-        "pointer.click",
-        "pointer.point_and_click",
-        "pointer.scroll",
-        "keyboard.key",
-        "keyboard.press",
-        "keyboard.shortcut",
-        "keyboard.type",
+    constexpr std::array<std::string_view, 25> REALM_METHODS = {
+        "realm.info",           "realm.create",  "realm.start",    "realm.pause",       "realm.resume",
+        "realm.stop",           "realm.destroy", "realm.grant",    "realm.open",        "realm.place",
+        "realm.takeover",       "realm.release", "realm.observe",  "realm.unobserve",   "realm.capture",
+        "realm.capture_region", "pointer.move",  "pointer.button", "pointer.click",     "pointer.point_and_click",
+        "pointer.scroll",       "keyboard.key",  "keyboard.press", "keyboard.shortcut", "keyboard.type",
     };
     if (std::ranges::find(REALM_METHODS, method) == REALM_METHODS.end())
         return controlError(request.request_id, "method_not_found", std::format("unknown method '{}'", method));
@@ -331,8 +336,15 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
     const bool inputMethod = method == "pointer.move" || method == "pointer.button" || method == "pointer.click" || method == "pointer.point_and_click" ||
         method == "pointer.scroll" || method == "keyboard.key" || method == "keyboard.press" || method == "keyboard.shortcut" || method == "keyboard.type";
     const bool captureMethod = method == "realm.capture" || method == "realm.capture_region";
-    if (!inputMethod && !captureMethod && hasAutomationParameters(*request.params))
+    const bool demoMethod    = method == "realm.grant" || method == "realm.open" || method == "realm.place";
+    if (!inputMethod && !captureMethod && !demoMethod && hasAutomationParameters(*request.params))
         return controlError(request.request_id, "invalid_params", std::format("{} does not accept automation parameters", method));
+    if (method == "realm.grant" && (!request.params->capability || !onlyRealmAnd(*request.params, {"capability"})))
+        return controlError(request.request_id, "invalid_params", "realm.grant requires only params.realm and params.capability");
+    if (method == "realm.open" && (!request.params->application || !onlyRealmAnd(*request.params, {"application"})))
+        return controlError(request.request_id, "invalid_params", "realm.open requires only params.realm and params.application");
+    if (method == "realm.place" && (!request.params->workspace || !onlyRealmAnd(*request.params, {"workspace"})))
+        return controlError(request.request_id, "invalid_params", "realm.place requires only params.realm and params.workspace");
 
     const auto& name = *request.params->realm;
     if (method == "realm.create") {
@@ -347,7 +359,30 @@ static std::string realmControlRequestImpl(CRealmManager& manager, CRealmWindowM
         return controlError(request.request_id, "realm_not_found", std::format("realm '{}' does not exist", name));
 
     if (method == "realm.info")
-        return controlSuccess(*request.request_id, std::format(R"({{"realm":{}}})", realmJSON(*realm)));
+        return controlSuccess(*request.request_id, std::format(R"({{"realm":{}}})", realmControlJSON(realm, windowManager)));
+    if (method == "realm.grant") {
+        const auto capability = realmCapabilityFromName(*request.params->capability);
+        if (!capability)
+            return controlError(request.request_id, "invalid_params", capability.error());
+        const auto granted = manager.grantCapability(realm->id(), *capability);
+        if (!granted)
+            return controlError(request.request_id, "operation_failed", granted.error());
+        return controlSuccess(*request.request_id, realmResult(std::format("granted {} capability", realmCapabilityName(*capability)), realm));
+    }
+    if (method == "realm.open") {
+        const auto opened = manager.openApplication(realm->id(), *request.params->application);
+        if (!opened)
+            return controlError(request.request_id, "operation_failed", opened.error());
+        return controlSuccess(
+            *request.request_id,
+            std::format(R"({{"action":"opened","application":"{}","pid":{},"realm":{}}})", escapeJSONStrings(*request.params->application), *opened, realmJSON(*realm)));
+    }
+    if (method == "realm.place") {
+        const auto placed = windowManager.placeRealm(realm->id(), *request.params->workspace);
+        if (!placed)
+            return controlError(request.request_id, "operation_failed", placed.error());
+        return controlSuccess(*request.request_id, std::format(R"({{"action":"placed","workspace":{},"realm":{}}})", *request.params->workspace, realmJSON(*realm)));
+    }
     if (method == "realm.observe" && !realm->capabilities().allows(eRealmCapability::OBSERVE))
         return controlError(request.request_id, "capability_denied", std::format("realm '{}' does not have the observe capability", realm->name()));
     if (inputMethod)

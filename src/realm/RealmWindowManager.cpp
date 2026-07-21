@@ -3,6 +3,7 @@
 #include "RealmDecoration.hpp"
 #include "../debug/log/Logger.hpp"
 #include "../desktop/state/FocusState.hpp"
+#include "../desktop/state/GlobalWindowController.hpp"
 #include "../desktop/state/ViewState.hpp"
 #include "../desktop/view/Window.hpp"
 #include "../event/EventBus.hpp"
@@ -10,6 +11,7 @@
 #include "../managers/ANRManager.hpp"
 #include "../pointer/PointerManager.hpp"
 #include "../render/Renderer.hpp"
+#include "../state/WorkspaceState.hpp"
 
 #include <format>
 #include <map>
@@ -21,6 +23,7 @@ struct CRealmWindowManager::SImpl {
     std::map<uint64_t, uint64_t>               realmToWindow;
     std::map<uint64_t, PHLWINDOWREF>           windows;
     std::map<uint64_t, IHyprWindowDecoration*> decorations;
+    std::map<uint64_t, int64_t>                requestedWorkspaces;
     CHyprSignalListener                        windowOpenListener;
     CHyprSignalListener                        windowCloseListener;
     CHyprSignalListener                        windowCloseRequestListener;
@@ -54,6 +57,7 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
         }
 
         m_impl->windows[window->m_stableID] = window;
+        applyRequestedWorkspace((*associated)->id(), window);
         auto decoration =
             makeUnique<CRealmDecoration>(window, *associated, [this, realmID = (*associated)->id()](eRealmDecorationAction action) { handleDecorationAction(realmID, action); });
         m_impl->decorations[window->m_stableID] = decoration.get();
@@ -91,6 +95,9 @@ CRealmWindowManager::CRealmWindowManager(CRealmManager& manager, SRealmWindowMan
             return;
 
         updateWindowANRSuppression(event.realm);
+
+        if (event.type == eRealmLifecycleEvent::DESTROYED)
+            m_impl->requestedWorkspaces.erase(event.realm->id());
 
         const auto windowID = windowForRealm(event.realm->id());
         if (!windowID)
@@ -192,6 +199,46 @@ SP<CRealm> CRealmWindowManager::realmForWindow(uint64_t windowID) const {
 std::optional<uint64_t> CRealmWindowManager::windowForRealm(uint64_t realmID) const {
     const auto associated = m_impl->realmToWindow.find(realmID);
     return associated == m_impl->realmToWindow.end() ? std::nullopt : std::optional<uint64_t>{associated->second};
+}
+
+std::expected<void, std::string> CRealmWindowManager::placeRealm(uint64_t realmID, int64_t workspaceID) {
+    const auto realm = m_manager.realmByID(realmID);
+    if (!realm)
+        return std::unexpected(std::format("realm {} does not exist", realmID));
+    if (workspaceID <= 0)
+        return std::unexpected("realm workspace must be a positive numeric workspace ID");
+
+    m_impl->requestedWorkspaces[realmID] = workspaceID;
+    const auto windowID                  = windowForRealm(realmID);
+    const auto windowIterator            = windowID ? m_impl->windows.find(*windowID) : m_impl->windows.end();
+    const auto window                    = windowIterator == m_impl->windows.end() ? PHLWINDOW{} : windowIterator->second.lock();
+    if (window)
+        applyRequestedWorkspace(realmID, window);
+    return {};
+}
+
+std::optional<int64_t> CRealmWindowManager::requestedWorkspace(uint64_t realmID) const {
+    const auto requested = m_impl->requestedWorkspaces.find(realmID);
+    return requested == m_impl->requestedWorkspaces.end() ? std::nullopt : std::optional<int64_t>{requested->second};
+}
+
+void CRealmWindowManager::applyRequestedWorkspace(uint64_t realmID, const PHLWINDOW& window) {
+    if (!window)
+        return;
+
+    const auto requested = m_impl->requestedWorkspaces.find(realmID);
+    if (requested == m_impl->requestedWorkspaces.end())
+        return;
+
+    auto workspace = State::workspaceState()->query().id(requested->second).run();
+    if (!workspace)
+        workspace = State::workspaceState()->create(requested->second, window->monitorID(), std::to_string(requested->second), false);
+    if (!workspace) {
+        Log::logger->log(Log::ERR, "Failed creating requested workspace {} for realm {}", requested->second, realmID);
+        return;
+    }
+
+    Desktop::globalWindowController()->moveWindowToWorkspace(window, workspace);
 }
 
 std::expected<void, std::string> CRealmWindowManager::handleCloseRequest(uint64_t windowID) {

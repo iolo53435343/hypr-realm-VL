@@ -16,7 +16,7 @@ static bool validRealmName(std::string_view name) {
 }
 
 static void printUsage(std::ostream& output) {
-    output << "usage: hyprland-realm-mcp-server --realm NAME [--socket ABSOLUTE_PATH]\n";
+    output << "usage: hyprland-realm-mcp-server [--realm NAME] [--socket ABSOLUTE_PATH]\n";
 }
 
 int main(int argc, char** argv) {
@@ -45,8 +45,8 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    if (!realm || !validRealmName(*realm)) {
-        std::cerr << "--realm must be 1 to 128 bytes without control characters\n";
+    if (realm && !validRealmName(*realm)) {
+        std::cerr << "when supplied, --realm must be 1 to 128 bytes without control characters\n";
         return 2;
     }
     if (!socketPath) {
@@ -58,12 +58,12 @@ int main(int argc, char** argv) {
         socketPath = std::move(*discovered);
     }
 
-    CRealmControlClient client{std::move(*socketPath), std::move(*realm)};
+    CRealmControlClient client{std::move(*socketPath)};
     if (auto connected = client.connect(); !connected) {
         std::cerr << connected.error() << '\n';
         return 1;
     }
 
-    CMCPServer server{client};
+    CMCPServer server{client, std::move(realm)};
     return server.run();
 }

@@ -1,9 +1,11 @@
 # Realm computer-use contract
 
 The realm MCP follows the same observe-act-observe loop as mature desktop
-automation tools without granting access to the host desktop. The adapter is
-permanently bound to one realm, and compositor capabilities, input ownership,
-and runtime observation permission remain authoritative.
+automation tools without granting access to host capture or host input. In the
+default orchestrator mode every computer-use call names its realm. The legacy
+`--realm NAME` mode remains permanently bound to one realm and omits realm
+arguments from its tool schemas. Compositor input ownership remains
+authoritative in both modes.
 
 ## Recommended loop
 
@@ -41,5 +43,7 @@ width, height, stride, format, and configured safety limit.
 
 Full frames are bounded to 64 MiB of shared memory and a maximum dimension of
 16384 pixels. Visual-change polling compares visible pixels in the full native
-frame against the previous capture, is bounded to 30 seconds, and runs no more
-than four polls per second, matching the compositor's capture rate limit.
+frame against the previous capture and is bounded to 30 seconds. It defaults
+to 100 ms between captures (ten polls per second). The compositor permits a
+sustained twelve captures per second with a four-frame burst; excess requests
+still return `rate_limited` instead of being queued.
