@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -54,7 +55,7 @@ namespace Realm::MCP {
         std::expected<std::string, std::string> clickPointer(std::string_view realm, std::string_view button);
         std::expected<std::string, std::string> scrollPointer(std::string_view realm, std::string_view axis, int32_t steps);
         std::expected<std::string, std::string> pressKey(std::string_view realm, uint32_t keycode);
-        std::expected<std::string, std::string> pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes);
+        std::expected<std::string, std::string> pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes, std::chrono::milliseconds settleTime);
         std::expected<std::string, std::string> typeText(std::string_view realm, std::string_view text);
 
       private:
@@ -64,7 +65,8 @@ namespace Realm::MCP {
         };
 
         std::expected<std::string, std::string>    request(std::string_view method, std::optional<std::string_view> realm, std::string_view extraParameters = {});
-        std::expected<std::string, std::string>    input(std::string_view realm, std::string_view method, std::string_view extraParameters);
+        std::expected<std::string, std::string>    input(std::string_view realm, std::string_view method, std::string_view extraParameters,
+                                                         std::chrono::milliseconds settleTime = std::chrono::milliseconds::zero());
         std::expected<SControlPacket, std::string> readPacket();
         std::expected<void, std::string>           readExact(void* data, size_t size, Hyprutils::OS::CFileDescriptor& descriptor);
         std::expected<void, std::string>           writeAll(std::string_view data);

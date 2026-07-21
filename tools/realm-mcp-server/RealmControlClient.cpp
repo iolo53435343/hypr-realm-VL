@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <thread>
 #include <unistd.h>
 
 using namespace Hyprutils::OS;
@@ -306,7 +307,8 @@ std::expected<std::string, std::string> CRealmControlClient::realmInfo(std::stri
     return request("realm.info", realm);
 }
 
-std::expected<std::string, std::string> CRealmControlClient::input(std::string_view realm, std::string_view method, std::string_view extraParameters) {
+std::expected<std::string, std::string> CRealmControlClient::input(std::string_view realm, std::string_view method, std::string_view extraParameters,
+                                                                   std::chrono::milliseconds settleTime) {
     const auto started = std::chrono::steady_clock::now();
     auto       queued  = request(method, realm, extraParameters);
     if (!queued)
@@ -330,8 +332,12 @@ std::expected<std::string, std::string> CRealmControlClient::input(std::string_v
             return std::unexpected(event.error.value_or("realm input failed"));
         if (event.event != "realm.input.applied")
             return std::unexpected("realm control input event is incomplete");
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
-        return std::format(R"({{"action":"applied","sequence":{},"elapsed_ms":{},"realm_name":{}}})", *queuedInput.sequence, elapsed, quoteJSON(realm));
+        const auto delivered = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        if (settleTime > std::chrono::milliseconds::zero())
+            std::this_thread::sleep_for(settleTime);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+        return std::format(R"({{"action":"applied","sequence":{},"delivery_ms":{},"settle_ms":{},"elapsed_ms":{},"realm_name":{}}})", *queuedInput.sequence, delivered.count(),
+                           settleTime.count(), elapsed.count(), quoteJSON(realm));
     }
     return std::unexpected("too many unmatched realm control events while waiting for input completion");
 }
@@ -474,14 +480,14 @@ std::expected<std::string, std::string> CRealmControlClient::pressKey(std::strin
     return input(realm, "keyboard.press", std::format(R"("keycode":{})", keycode));
 }
 
-std::expected<std::string, std::string> CRealmControlClient::pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes) {
+std::expected<std::string, std::string> CRealmControlClient::pressShortcut(std::string_view realm, const std::vector<uint32_t>& keycodes, std::chrono::milliseconds settleTime) {
     std::string encoded;
     for (const auto keycode : keycodes) {
         if (!encoded.empty())
             encoded += ',';
         encoded += std::to_string(keycode);
     }
-    return input(realm, "keyboard.shortcut", std::format(R"("keycodes":[{}])", encoded));
+    return input(realm, "keyboard.shortcut", std::format(R"("keycodes":[{}])", encoded), settleTime);
 }
 
 std::expected<std::string, std::string> CRealmControlClient::typeText(std::string_view realm, std::string_view text) {

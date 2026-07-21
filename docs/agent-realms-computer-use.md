@@ -14,7 +14,10 @@ authoritative in both modes.
 2. Prefer `point_and_click` for an atomic motion and click. Use `move_pointer`
    separately only for hover or scrolling.
 3. Prefer named `press_key` and `press_shortcut` operations over raw Linux
-   keycodes.
+   keycodes. `press_shortcut` defaults to a 400 ms application-focus grace
+   interval, reducing the chance that text in the next MCP call races a browser
+   shortcut such as Ctrl+L or Ctrl+T. Set `settle_ms` to 0 to disable it or to
+   another bounded value when an application needs different timing.
 4. After a visible action, call `capture_realm` with
    `wait_for_change=true`. Use the bounded `wait` tool when an application has
    a known delay but no reliable visual transition.
@@ -31,10 +34,12 @@ background rendering.
 ## Completion and diagnostics
 
 Input success means the nested compositor processed the complete ordered
-action. Structured results include the input sequence and acknowledgement
-latency in milliseconds. This does not claim that an application completed
-network activity or accepted a semantic action; agents verify that with a new
-capture.
+action. Structured results include the input sequence, compositor delivery
+latency, configured settling interval, and total elapsed time in milliseconds.
+Shortcuts return only after their settling interval (400 ms by default). The
+interval is a grace period, not proof that an application changed focus,
+completed network activity, or accepted a semantic action; agents verify that
+with a new capture.
 
 Capture metadata reports native source dimensions, returned image dimensions,
 the active pointer coordinate dimensions, whether the call waited for a visual

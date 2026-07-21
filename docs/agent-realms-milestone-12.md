@@ -69,6 +69,13 @@ This acknowledgement proves ordered delivery to the realm compositor. It does
 not claim that an application accepted a click, completed a navigation, or
 finished rendering. Agents should capture again after visible actions.
 
+The MCP `press_shortcut` workflow adds a configurable grace interval after
+this acknowledgement to reduce application-focus races such as Ctrl+L followed
+immediately by text. It defaults to 400 ms, accepts `settle_ms` from 0 through
+2000, and reports compositor delivery, settling, and total elapsed time
+separately. This does not change the meaning or timing of
+`realm.input.applied` itself.
+
 ## Native capture coordinates
 
 The embedded realm window is resizable, so the MCP adapter captures the

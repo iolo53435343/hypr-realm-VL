@@ -36,10 +36,21 @@ using namespace Realm;
 static_assert(WL_SHM_FORMAT_ARGB8888 == REALM_CAPTURE_FORMAT_ARGB8888);
 static_assert(WL_SHM_FORMAT_XRGB8888 == REALM_CAPTURE_FORMAT_XRGB8888);
 
+static constexpr uint32_t XKB_KEYCODE_OFFSET = 8;
+
 struct SRealmKeyStroke {
     uint32_t code      = 0;
     uint32_t modifiers = 0;
     uint32_t group     = 0;
+};
+
+struct SRealmKeyboardModifiers {
+    uint32_t depressed = 0;
+    uint32_t latched   = 0;
+    uint32_t locked    = 0;
+    uint32_t group     = 0;
+
+    bool     operator==(const SRealmKeyboardModifiers&) const = default;
 };
 
 static uint32_t inputTimestamp() {
@@ -184,6 +195,8 @@ struct CWaylandInput::SImpl {
             wl_display_disconnect(display);
         else if (waylandFD >= 0)
             close(waylandFD);
+        if (keyboardState)
+            xkb_state_unref(keyboardState);
         if (keymap)
             xkb_keymap_unref(keymap);
         if (context)
@@ -249,6 +262,9 @@ struct CWaylandInput::SImpl {
         keymap = xkb_keymap_new_from_names2(context, &names, XKB_KEYMAP_FORMAT_TEXT_V2, XKB_KEYMAP_COMPILE_NO_FLAGS);
         if (!keymap)
             return std::unexpected("failed compiling the realm keyboard map");
+        keyboardState = xkb_state_new(keymap);
+        if (!keyboardState)
+            return std::unexpected("failed creating the realm keyboard state");
 
         char* keymapText = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V2);
         if (!keymapText)
@@ -539,6 +555,38 @@ struct CWaylandInput::SImpl {
         return *best;
     }
 
+    SRealmKeyboardModifiers currentKeyboardModifiers() const {
+        if (!keyboardState)
+            return {};
+
+        return {
+            .depressed = xkb_state_serialize_mods(keyboardState, XKB_STATE_MODS_DEPRESSED),
+            .latched   = xkb_state_serialize_mods(keyboardState, XKB_STATE_MODS_LATCHED),
+            .locked    = xkb_state_serialize_mods(keyboardState, XKB_STATE_MODS_LOCKED),
+            .group     = xkb_state_serialize_layout(keyboardState, XKB_STATE_LAYOUT_EFFECTIVE),
+        };
+    }
+
+    void sendKeyboardModifiers(const SRealmKeyboardModifiers& modifiers) {
+        if (modifiers == sentKeyboardModifiers)
+            return;
+
+        zwp_virtual_keyboard_v1_modifiers(keyboard, modifiers.depressed, modifiers.latched, modifiers.locked, modifiers.group);
+        sentKeyboardModifiers = modifiers;
+    }
+
+    void sendKeyboardKey(uint32_t code, bool pressed) {
+        const auto time = inputTimestamp();
+        zwp_virtual_keyboard_v1_key(keyboard, time, code, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+
+        const bool stateChanged = pressed ? pressedKeys.emplace(code).second : pressedKeys.erase(code) != 0;
+        if (!stateChanged || !keyboardState)
+            return;
+
+        xkb_state_update_key(keyboardState, code + XKB_KEYCODE_OFFSET, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+        sendKeyboardModifiers(currentKeyboardModifiers());
+    }
+
     std::expected<void, std::string> typeText(std::string_view text) {
         auto codepoints = decodeUTF8(text);
         if (!codepoints)
@@ -553,12 +601,18 @@ struct CWaylandInput::SImpl {
             strokes.emplace_back(*stroke);
         }
 
+        const auto baseModifiers = currentKeyboardModifiers();
         for (const auto& stroke : strokes) {
             const auto time = inputTimestamp();
-            zwp_virtual_keyboard_v1_modifiers(keyboard, stroke.modifiers, 0, 0, stroke.group);
+            sendKeyboardModifiers(SRealmKeyboardModifiers{
+                .depressed = baseModifiers.depressed | stroke.modifiers,
+                .latched   = baseModifiers.latched,
+                .locked    = baseModifiers.locked,
+                .group     = stroke.group,
+            });
             zwp_virtual_keyboard_v1_key(keyboard, time, stroke.code, WL_KEYBOARD_KEY_STATE_PRESSED);
             zwp_virtual_keyboard_v1_key(keyboard, time, stroke.code, WL_KEYBOARD_KEY_STATE_RELEASED);
-            zwp_virtual_keyboard_v1_modifiers(keyboard, 0, 0, 0, 0);
+            sendKeyboardModifiers(baseModifiers);
         }
         return {};
     }
@@ -600,23 +654,24 @@ struct CWaylandInput::SImpl {
                     zwlr_virtual_pointer_v1_axis_discrete(pointer, time, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_int(message.horizontal * 15), message.horizontal);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 return queueInputAcknowledgement(message.sequence);
-            case eRealmInputMessageType::KEYBOARD_KEY:
-                zwp_virtual_keyboard_v1_key(keyboard, time, message.code, message.pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
-                if (message.pressed)
-                    pressedKeys.emplace(message.code);
-                else
-                    pressedKeys.erase(message.code);
-                return queueInputAcknowledgement(message.sequence);
+            case eRealmInputMessageType::KEYBOARD_KEY: sendKeyboardKey(message.code, message.pressed); return queueInputAcknowledgement(message.sequence);
             case eRealmInputMessageType::KEYBOARD_PRESS:
-                zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_PRESSED);
-                zwp_virtual_keyboard_v1_key(keyboard, time, message.code, WL_KEYBOARD_KEY_STATE_RELEASED);
+                sendKeyboardKey(message.code, true);
+                sendKeyboardKey(message.code, false);
                 return queueInputAcknowledgement(message.sequence);
-            case eRealmInputMessageType::KEYBOARD_SHORTCUT:
-                for (const auto code : message.codes)
-                    zwp_virtual_keyboard_v1_key(keyboard, time, code, WL_KEYBOARD_KEY_STATE_PRESSED);
-                for (const auto code : message.codes | std::views::reverse)
-                    zwp_virtual_keyboard_v1_key(keyboard, time, code, WL_KEYBOARD_KEY_STATE_RELEASED);
+            case eRealmInputMessageType::KEYBOARD_SHORTCUT: {
+                std::vector<uint32_t> pressedByShortcut;
+                pressedByShortcut.reserve(message.codes.size());
+                for (const auto code : message.codes) {
+                    if (pressedKeys.contains(code))
+                        continue;
+                    sendKeyboardKey(code, true);
+                    pressedByShortcut.emplace_back(code);
+                }
+                for (const auto code : pressedByShortcut | std::views::reverse)
+                    sendKeyboardKey(code, false);
                 return queueInputAcknowledgement(message.sequence);
+            }
             case eRealmInputMessageType::KEYBOARD_TYPE:
                 if (const auto typed = typeText(message.text); !typed)
                     return typed;
@@ -638,11 +693,16 @@ struct CWaylandInput::SImpl {
             return;
 
         if (keyboard) {
-            const auto time = inputTimestamp();
-            for (const auto key : pressedKeys)
-                zwp_virtual_keyboard_v1_key(keyboard, time, key, WL_KEYBOARD_KEY_STATE_RELEASED);
+            const auto keys = pressedKeys;
+            for (const auto key : keys)
+                sendKeyboardKey(key, false);
             zwp_virtual_keyboard_v1_modifiers(keyboard, 0, 0, 0, 0);
+            sentKeyboardModifiers = {};
             pressedKeys.clear();
+
+            if (keyboardState)
+                xkb_state_unref(keyboardState);
+            keyboardState = keymap ? xkb_state_new(keymap) : nullptr;
         }
         if (pointer) {
             const auto time = inputTimestamp();
@@ -680,6 +740,8 @@ struct CWaylandInput::SImpl {
     zwlr_virtual_pointer_v1*                            pointer           = nullptr;
     xkb_context*                                        context           = nullptr;
     xkb_keymap*                                         keymap            = nullptr;
+    xkb_state*                                          keyboardState     = nullptr;
+    SRealmKeyboardModifiers                             sentKeyboardModifiers;
     std::map<uint32_t, SRealmKeyStroke>                 keyStrokes;
     std::set<uint32_t>                                  pressedKeys;
     std::set<uint32_t>                                  pressedButtons;

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 
@@ -328,6 +329,9 @@ class RealmMCPServerTest(unittest.TestCase):
         self.assertNotIn("open_application", names)
         for tool in listed:
             self.assertNotIn("realm", tool["inputSchema"].get("properties", {}))
+        shortcut_schema = next(tool for tool in listed if tool["name"] == "press_shortcut")["inputSchema"]
+        self.assertEqual(shortcut_schema["properties"]["settle_ms"]["default"], 400)
+        self.assertEqual(shortcut_schema["properties"]["settle_ms"]["maximum"], 2000)
 
         info = self.tool("realm_info", {}, 3)
         self.assertFalse(info["isError"])
@@ -350,8 +354,20 @@ class RealmMCPServerTest(unittest.TestCase):
         self.assertFalse(pressed["isError"])
         named = self.tool("press_key", {"key": "enter"}, "7-named")
         self.assertFalse(named["isError"])
+        shortcut_started = time.monotonic()
         shortcut = self.tool("press_shortcut", {"modifiers": ["ctrl"], "key": "t"}, "7-shortcut")
+        shortcut_elapsed = time.monotonic() - shortcut_started
         self.assertFalse(shortcut["isError"])
+        self.assertEqual(shortcut["structuredContent"]["settle_ms"], 400)
+        self.assertGreaterEqual(shortcut["structuredContent"]["elapsed_ms"], 400)
+        self.assertGreaterEqual(shortcut_elapsed, 0.35)
+        no_settle = self.tool("press_shortcut", {"modifiers": ["ctrl"], "key": "l", "settle_ms": 0}, "7-shortcut-no-settle")
+        self.assertFalse(no_settle["isError"])
+        self.assertEqual(no_settle["structuredContent"]["settle_ms"], 0)
+        before = len(self.control.requests)
+        invalid_settle = self.tool("press_shortcut", {"modifiers": ["ctrl"], "key": "l", "settle_ms": 2001}, "7-shortcut-invalid-settle")
+        self.assertTrue(invalid_settle["isError"])
+        self.assertEqual(len(self.control.requests), before)
         typed = self.tool("type_text", {"text": "hello realm"}, 8)
         self.assertFalse(typed["isError"])
         waited = self.tool("wait", {"duration_ms": 0}, "8-wait")
@@ -404,7 +420,7 @@ class RealmMCPServerTest(unittest.TestCase):
         self.assertEqual(methods.count("pointer.click"), 1)
         self.assertEqual(methods.count("pointer.point_and_click"), 2)
         self.assertEqual(methods.count("keyboard.press"), 2)
-        self.assertEqual(methods.count("keyboard.shortcut"), 1)
+        self.assertEqual(methods.count("keyboard.shortcut"), 2)
         self.assertEqual(methods.count("realm.capture"), 3)
         self.assertNotIn("realm.capture_region", methods)
         move = next(request for request in self.control.requests if request["method"] == "pointer.move")
