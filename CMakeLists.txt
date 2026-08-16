@@ -113,7 +113,7 @@ add_compile_options(
   -Wno-narrowing
   -Wno-pointer-arith
   -Wno-clobbered
-  -frtti
+  $<$<COMPILE_LANGUAGE:CXX>:-frtti>
   -fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=)
 
 # disable lto as it may break plugins
