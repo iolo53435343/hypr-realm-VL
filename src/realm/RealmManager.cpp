@@ -330,7 +330,7 @@ hl.config({
         invisible = false,
     },
     xwayland = {
-        enabled = false,
+        enabled = true,
     },
     misc = {
         background_color = "rgba(17111fff)",
@@ -400,6 +400,7 @@ static std::expected<std::filesystem::path, std::string> createRuntimeDirectory(
 
 struct SRealmReadiness {
     std::string waylandSocket;
+    std::string xwaylandDisplay;
     std::string instanceSignature;
 };
 
@@ -429,9 +430,11 @@ static std::optional<SRealmReadiness> realmReadiness(const CRealm& realm, pid_t 
         if (!socketPath.is_absolute())
             socketPath = std::filesystem::path(realm.runtimeDirectory()) / socketPath;
 
-        if (std::filesystem::is_socket(socketPath, error))
+        const auto xwaylandDisplay = readXWaylandDisplayMetadata(iterator->path());
+        if (std::filesystem::is_socket(socketPath, error) && xwaylandDisplay)
             return SRealmReadiness{
                 .waylandSocket     = std::move(socket),
+                .xwaylandDisplay   = *xwaylandDisplay,
                 .instanceSignature = iterator->path().filename().string(),
             };
         error.clear();
@@ -611,6 +614,7 @@ std::expected<void, std::string> CRealmManager::prepareRuntime(CRealm& realm) {
     realm.m_configPath       = (*runtime / "realm.lua").string();
     realm.m_logPath          = (*runtime / "realm.log").string();
     realm.m_waylandSocket.clear();
+    realm.m_xwaylandDisplay.clear();
     realm.m_instanceSignature.clear();
 
     static constexpr std::array<std::string_view, 3> RUNTIME_DIRECTORIES = {
@@ -629,6 +633,12 @@ std::expected<void, std::string> CRealmManager::prepareRuntime(CRealm& realm) {
     }
 
     auto writeResult = writePrivateFile(realm.m_configPath, realmConfig(), std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+    if (!writeResult) {
+        cleanupRuntime(realm);
+        return writeResult;
+    }
+
+    writeResult = writePrivateFile(*runtime / "Xauthority", "", std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     if (!writeResult) {
         cleanupRuntime(realm);
         return writeResult;
@@ -669,6 +679,7 @@ std::expected<CRealmManager::SLaunchResult, std::string> CRealmManager::launchRe
         {"XDG_RUNTIME_DIR", realm.runtimeDirectory()},
         {"XDG_CACHE_HOME", (std::filesystem::path(realm.runtimeDirectory()) / "cache").string()},
         {"XDG_STATE_HOME", (std::filesystem::path(realm.runtimeDirectory()) / "state").string()},
+        {"XAUTHORITY", (std::filesystem::path(realm.runtimeDirectory()) / "Xauthority").string()},
         {"WAYLAND_DISPLAY", m_options.hostWaylandSocket},
         {"PATH", path},
         {"HYPRLAND_REALM_ID", std::to_string(realm.id())},
@@ -786,6 +797,12 @@ std::expected<pid_t, std::string> CRealmManager::openApplication(uint64_t id, co
     if (realm->waylandSocket().empty() || realm->m_instanceSignature.empty())
         return std::unexpected(std::format("realm '{}' display is unavailable", realm->name()));
 
+    const auto instanceDirectory = std::filesystem::path(realm->runtimeDirectory()) / "hypr" / realm->m_instanceSignature;
+    const auto xwaylandDisplay   = readXWaylandDisplayMetadata(instanceDirectory);
+    if (!xwaylandDisplay)
+        return std::unexpected(std::format("realm '{}' XWayland display is unavailable", realm->name()));
+    realm->m_xwaylandDisplay = *xwaylandDisplay;
+
     int execStatusPipe[2] = {-1, -1};
     if (!createCloexecPipe(execStatusPipe))
         return std::unexpected(std::format("failed creating application exec pipe: {}", strerror(errno)));
@@ -843,16 +860,20 @@ std::expected<pid_t, std::string> CRealmManager::openApplication(uint64_t id, co
         close(logFD);
 
         const std::vector<std::pair<std::string, std::string>> environment = {
-            {"XDG_RUNTIME_DIR", realm->runtimeDirectory()},     {"WAYLAND_DISPLAY", realm->waylandSocket()}, {"HYPRLAND_INSTANCE_SIGNATURE", realm->m_instanceSignature},
-            {"HYPRLAND_REALM_ID", std::to_string(realm->id())}, {"HYPRLAND_REALM_NAME", realm->name()},
+            {"XDG_RUNTIME_DIR", realm->runtimeDirectory()},
+            {"WAYLAND_DISPLAY", realm->waylandSocket()},
+            {"DISPLAY", *xwaylandDisplay},
+            {"XAUTHORITY", (std::filesystem::path(realm->runtimeDirectory()) / "Xauthority").string()},
+            {"HYPRLAND_INSTANCE_SIGNATURE", realm->m_instanceSignature},
+            {"HYPRLAND_REALM_ID", std::to_string(realm->id())},
+            {"HYPRLAND_REALM_NAME", realm->name()},
         };
         for (const auto& [name, value] : environment) {
             if (setenv(name.c_str(), value.c_str(), 1) < 0)
                 fail(errno);
         }
 
-        static constexpr std::array<std::string_view, 3> HOST_DISPLAY_ENVIRONMENT = {
-            "DISPLAY",
+        static constexpr std::array<std::string_view, 2> HOST_DISPLAY_ENVIRONMENT = {
             "SWAYSOCK",
             "WAYLAND_SOCKET",
         };
@@ -1132,6 +1153,7 @@ void CRealmManager::updateReadiness(CRealm& realm, SRealmProcess& process) {
 
     if (const auto readiness = realmReadiness(realm, realm.compositorPID()); readiness) {
         realm.m_waylandSocket     = readiness->waylandSocket;
+        realm.m_xwaylandDisplay   = readiness->xwaylandDisplay;
         realm.m_instanceSignature = readiness->instanceSignature;
         if (realm.transitionTo(eRealmState::RUNNING)) {
             const auto realmPointer = realmByID(realm.id());
@@ -1265,6 +1287,7 @@ std::expected<void, std::string> CRealmManager::cleanupRuntime(CRealm& realm) {
     m_ownedRuntimeDirectories.erase(owned);
     realm.m_runtimeDirectory.clear();
     realm.m_waylandSocket.clear();
+    realm.m_xwaylandDisplay.clear();
     realm.m_instanceSignature.clear();
     realm.m_configPath.clear();
     realm.m_logPath.clear();

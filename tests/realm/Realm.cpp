@@ -1,5 +1,7 @@
 #include <realm/Realm.hpp>
 
+#include <fstream>
+
 #include <gtest/gtest.h>
 
 using namespace Realm;
@@ -41,6 +43,33 @@ TEST(Realm, capabilityNamesAndParsingAreStable) {
     EXPECT_EQ(realmCapabilityFromName("pointer"), eRealmCapability::POINTER);
     EXPECT_EQ(realmCapabilityFromName("keyboard"), eRealmCapability::KEYBOARD);
     EXPECT_FALSE(realmCapabilityFromName("network"));
+}
+
+TEST(Realm, atomicallyPublishesPrivateXWaylandDisplayMetadataWithoutFollowingSymlinks) {
+    const auto root = std::filesystem::temp_directory_path() / "hypr-realm-xwayland-metadata-test";
+    std::filesystem::remove_all(root);
+    ASSERT_TRUE(std::filesystem::create_directory(root));
+
+    const auto victim = root / "victim";
+    {
+        std::ofstream stream(victim);
+        stream << "untouched\n";
+    }
+
+    const auto metadata = root / XWAYLAND_DISPLAY_METADATA_FILE;
+    std::filesystem::create_symlink(victim, metadata);
+
+    ASSERT_TRUE(writeXWaylandDisplayMetadata(root, ":91"));
+    EXPECT_FALSE(std::filesystem::is_symlink(metadata));
+    EXPECT_EQ(readXWaylandDisplayMetadata(root), ":91");
+    EXPECT_EQ(std::filesystem::status(metadata).permissions(), std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+
+    std::ifstream victimContents(victim);
+    std::string   victimLine;
+    ASSERT_TRUE(std::getline(victimContents, victimLine));
+    EXPECT_EQ(victimLine, "untouched");
+
+    std::filesystem::remove_all(root);
 }
 
 TEST(Realm, inputOwnerNamesAreStable) {

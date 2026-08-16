@@ -22,6 +22,7 @@ class CXWaylandServer {
     // called on ready
     int        ready(int fd, uint32_t mask);
 
+    void       revokeRealmReadiness();
     void       die();
 
     wl_client* m_xwaylandClient = nullptr;

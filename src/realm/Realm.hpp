@@ -2,12 +2,19 @@
 
 #include <cstdint>
 #include <expected>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <sys/types.h>
 #include <vector>
 
 namespace Realm {
+    inline constexpr std::string_view XWAYLAND_DISPLAY_METADATA_FILE = "realm-xwayland-display";
+
+    std::expected<void, std::string>  writeXWaylandDisplayMetadata(const std::filesystem::path& instanceDirectory, std::string_view display);
+    std::optional<std::string>        readXWaylandDisplayMetadata(const std::filesystem::path& instanceDirectory);
+
     enum class eRealmState : uint8_t {
         CREATING = 0,
         RUNNING,
@@ -82,6 +89,7 @@ namespace Realm {
         pid_t                       m_compositorPID = 0;
         std::string                 m_runtimeDirectory;
         std::string                 m_waylandSocket;
+        std::string                 m_xwaylandDisplay;
         std::string                 m_instanceSignature;
         std::string                 m_configPath;
         std::string                 m_logPath;

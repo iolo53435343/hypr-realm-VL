@@ -1,9 +1,100 @@
 #include "Realm.hpp"
 
+#include <cerrno>
+#include <charconv>
+#include <cstring>
+#include <fcntl.h>
 #include <format>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 
 using namespace Realm;
+
+static bool validXWaylandDisplay(std::string_view display) {
+    if (display.size() < 2 || display.size() > 16 || display.front() != ':')
+        return false;
+
+    uint32_t displayNumber       = 0;
+    const auto [end, parseError] = std::from_chars(display.data() + 1, display.data() + display.size(), displayNumber);
+    return parseError == std::errc{} && end == display.data() + display.size() && displayNumber <= 65535;
+}
+
+std::expected<void, std::string> Realm::writeXWaylandDisplayMetadata(const std::filesystem::path& instanceDirectory, std::string_view display) {
+    if (!validXWaylandDisplay(display))
+        return std::unexpected(std::format("invalid XWayland display '{}'", display));
+
+    std::error_code error;
+    if (!std::filesystem::is_directory(instanceDirectory, error) || error)
+        return std::unexpected(std::format("invalid realm instance directory: {}", error.message()));
+
+    const auto path          = instanceDirectory / XWAYLAND_DISPLAY_METADATA_FILE;
+    const auto temporaryPath = instanceDirectory / std::format("{}.tmp", XWAYLAND_DISPLAY_METADATA_FILE);
+    std::filesystem::remove(temporaryPath, error);
+    if (error)
+        return std::unexpected(std::format("failed clearing stale {}: {}", temporaryPath.string(), error.message()));
+
+    int fd = open(temporaryPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, S_IRUSR | S_IWUSR);
+    if (fd < 0)
+        return std::unexpected(std::format("failed creating {}: {}", temporaryPath.string(), strerror(errno)));
+
+    const auto fail = [&](std::string_view operation) -> std::expected<void, std::string> {
+        const auto savedErrno = errno;
+        close(fd);
+        std::error_code cleanupError;
+        std::filesystem::remove(temporaryPath, cleanupError);
+        return std::unexpected(std::format("failed {} {}: {}", operation, temporaryPath.string(), strerror(savedErrno)));
+    };
+
+    const auto payload = std::format("{}\n", display);
+    size_t     offset  = 0;
+    while (offset < payload.size()) {
+        const auto written = write(fd, payload.data() + offset, payload.size() - offset);
+        if (written < 0) {
+            if (errno == EINTR)
+                continue;
+            return fail("writing");
+        }
+        if (written == 0) {
+            errno = EIO;
+            return fail("writing");
+        }
+        offset += written;
+    }
+
+    if (fchmod(fd, S_IRUSR | S_IWUSR) < 0)
+        return fail("securing");
+    if (close(fd) < 0) {
+        fd = -1;
+        return fail("closing");
+    }
+    fd = -1;
+
+    std::filesystem::rename(temporaryPath, path, error);
+    if (error) {
+        std::error_code cleanupError;
+        std::filesystem::remove(temporaryPath, cleanupError);
+        return std::unexpected(std::format("failed publishing {}: {}", path.string(), error.message()));
+    }
+
+    return {};
+}
+
+std::optional<std::string> Realm::readXWaylandDisplayMetadata(const std::filesystem::path& instanceDirectory) {
+    const auto      path = instanceDirectory / XWAYLAND_DISPLAY_METADATA_FILE;
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(path, error)) || std::filesystem::file_size(path, error) > 16 || error)
+        return std::nullopt;
+
+    std::ifstream displayFile(path);
+    std::string   display;
+    std::string   trailingLine;
+    if (!std::getline(displayFile, display) || std::getline(displayFile, trailingLine) || !validXWaylandDisplay(display))
+        return std::nullopt;
+
+    return display;
+}
 
 std::string_view Realm::realmStateName(eRealmState state) {
     switch (state) {

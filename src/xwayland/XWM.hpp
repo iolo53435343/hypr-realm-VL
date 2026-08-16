@@ -115,6 +115,9 @@ class CXWM {
     CXWM();
     ~CXWM();
 
+    bool ready() const {
+        return m_ready;
+    }
     int                onEvent(int fd, uint32_t mask);
     SP<CX11DataDevice> getDataDevice();
     SP<IDataOffer>     createX11DataOffer(SP<CWLSurfaceResource> surf, SP<IDataSource> source);
@@ -190,6 +193,7 @@ class CXWM {
     xcb_window_t                              m_wmWindow;
 
     wl_event_source*                          m_eventSource = nullptr;
+    bool                                      m_ready       = false;
 
     const xcb_query_extension_reply_t*        m_xfixes      = nullptr;
     const xcb_query_extension_reply_t*        m_xres        = nullptr;

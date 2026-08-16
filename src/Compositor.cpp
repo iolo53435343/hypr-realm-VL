@@ -785,6 +785,12 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 }
 
 void CCompositor::createLockFile() {
+    if (Env::envEnabled("HYPRLAND_REALM_ID")) {
+        const auto      metadataPath = std::filesystem::path(m_instancePath) / Realm::XWAYLAND_DISPLAY_METADATA_FILE;
+        std::error_code error;
+        std::filesystem::remove(metadataPath, error);
+    }
+
     const auto    PATH = m_instancePath + "/hyprland.lock";
 
     std::ofstream ofs(PATH, std::ios::trunc);
@@ -799,6 +805,9 @@ void CCompositor::removeLockFile() {
 
     if (std::filesystem::exists(PATH))
         std::filesystem::remove(PATH);
+
+    if (Env::envEnabled("HYPRLAND_REALM_ID"))
+        std::filesystem::remove(std::filesystem::path(m_instancePath) / Realm::XWAYLAND_DISPLAY_METADATA_FILE);
 }
 
 void CCompositor::startCompositor() {

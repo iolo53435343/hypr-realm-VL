@@ -54,7 +54,7 @@ hl.config({
     },
 
     xwayland = {
-        enabled = false,
+        enabled = true,
     },
 
     misc = {

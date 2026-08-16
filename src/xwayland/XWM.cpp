@@ -860,6 +860,8 @@ int CXWM::onEvent(int fd, uint32_t mask) {
     if ((mask & WL_EVENT_HANGUP) || (mask & WL_EVENT_ERROR)) {
         Log::logger->log(Log::ERR, "XWayland has yeeten the xwm off?!");
         Log::logger->log(Log::CRIT, "XWayland has yeeten the xwm off?!");
+        if (g_pXWayland->m_server)
+            g_pXWayland->m_server->revokeRealmReadiness();
         // Attempt to create fresh instance
         g_pEventLoopManager->doLater([]() {
             g_pXWayland->m_wm.reset();
@@ -1053,6 +1055,7 @@ CXWM::CXWM() : m_connection(makeUnique<CXCBConnection>(g_pXWayland->m_server->m_
     createWMWindow();
 
     xcb_flush(getConnection());
+    m_ready = true;
 }
 
 CXWM::~CXWM() {

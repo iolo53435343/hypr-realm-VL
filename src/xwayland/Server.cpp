@@ -25,6 +25,7 @@
 #include "../defines.hpp"
 #include "../Compositor.hpp"
 #include "../pointer/cursor/CursorManager.hpp"
+#include "../realm/Realm.hpp"
 using namespace Hyprutils::OS;
 
 // Constants
@@ -267,7 +268,20 @@ CXWaylandServer::~CXWaylandServer() {
     }
 }
 
+void CXWaylandServer::revokeRealmReadiness() {
+    if (!getenv("HYPRLAND_REALM_ID") || !g_pCompositor)
+        return;
+
+    std::error_code error;
+    const auto      path = std::filesystem::path(g_pCompositor->m_instancePath) / Realm::XWAYLAND_DISPLAY_METADATA_FILE;
+    std::filesystem::remove(path, error);
+    if (error)
+        Log::logger->log(Log::ERR, "Failed revoking realm XWayland readiness: {}", error.message());
+}
+
 void CXWaylandServer::die() {
+    revokeRealmReadiness();
+
     if (m_display < 0)
         return;
 
@@ -422,6 +436,18 @@ int CXWaylandServer::ready(int fd, uint32_t mask) {
     // start the wm
     if (!g_pXWayland->m_wm)
         g_pXWayland->m_wm = makeUnique<CXWM>();
+
+    if (!g_pXWayland->m_wm->ready()) {
+        Log::logger->log(Log::ERR, "XWayland announced readiness, but XWM initialization failed");
+        g_pXWayland->m_wm.reset();
+        revokeRealmReadiness();
+        return 1;
+    }
+
+    if (getenv("HYPRLAND_REALM_ID")) {
+        if (const auto result = Realm::writeXWaylandDisplayMetadata(g_pCompositor->m_instancePath, m_displayName); !result)
+            Log::logger->log(Log::ERR, "Failed publishing realm XWayland readiness: {}", result.error());
+    }
 
     Pointer::Cursor::mgr()->setXWaylandCursor();
 

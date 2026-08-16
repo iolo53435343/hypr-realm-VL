@@ -198,6 +198,9 @@ TEST_F(CRealmIPCTest, opensAnApplicationInsideTheRealmProcessAndEnvironment) {
     if (const auto inheritedPath = environmentValue("PATH"); inheritedPath != "<unset>")
         applicationPath += std::format(":{}", inheritedPath);
     CScopedEnvironmentVariable scopedPath{"PATH", applicationPath};
+    CScopedEnvironmentVariable scopedXAuthority{"XAUTHORITY", "/tmp/host-xauthority"};
+    CScopedEnvironmentVariable scopedSwaySocket{"SWAYSOCK", "/tmp/host-sway.sock"};
+    CScopedEnvironmentVariable scopedWaylandSocket{"WAYLAND_SOCKET", "999"};
 
     const auto                 invalid = realmCommandRequest(*m_manager, *m_windowManager, FORMAT_JSON, "realm open application realm brave;touch");
     EXPECT_TRUE(invalid.contains(R"("ok":false)"));
@@ -233,7 +236,12 @@ TEST_F(CRealmIPCTest, opensAnApplicationInsideTheRealmProcessAndEnvironment) {
     EXPECT_EQ(state.at("HYPRLAND_INSTANCE_SIGNATURE"), "test-instance");
     EXPECT_EQ(state.at("HYPRLAND_REALM_ID"), std::to_string(realm->id()));
     EXPECT_EQ(state.at("HYPRLAND_REALM_NAME"), realm->name());
-    EXPECT_EQ(state.at("DISPLAY"), "<unset>");
+    EXPECT_EQ(state.at("DISPLAY"), ":77");
+    const auto authorityPath = runtime / "Xauthority";
+    EXPECT_EQ(state.at("XAUTHORITY"), authorityPath.string());
+    ASSERT_TRUE(std::filesystem::is_regular_file(authorityPath));
+    EXPECT_EQ(std::filesystem::file_size(authorityPath), 0);
+    EXPECT_EQ(std::filesystem::status(authorityPath).permissions(), std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
     EXPECT_EQ(state.at("SWAYSOCK"), "<unset>");
     EXPECT_EQ(state.at("WAYLAND_SOCKET"), "<unset>");
 
@@ -241,6 +249,35 @@ TEST_F(CRealmIPCTest, opensAnApplicationInsideTheRealmProcessAndEnvironment) {
     ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::STOPPED));
     EXPECT_TRUE(waitForProcessExit(*m_manager, applicationPID));
     ASSERT_TRUE(destroyThroughIPC(*m_manager, *m_windowManager, "application realm"));
+}
+
+TEST_F(CRealmIPCTest, revalidatesXWaylandDisplayForEveryApplicationLaunch) {
+    ASSERT_TRUE(m_manager->createRealm("xwayland restart"));
+    const auto realm = m_manager->realmByName("xwayland restart");
+    ASSERT_TRUE(realm);
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
+
+    const auto application = std::filesystem::path(realm->runtimeDirectory()) / "bin/realm-application-helper";
+    std::filesystem::create_symlink(REALM_APPLICATION_HELPER_PATH, application);
+    auto applicationPath = application.parent_path().string();
+    if (const auto inheritedPath = environmentValue("PATH"); inheritedPath != "<unset>")
+        applicationPath += std::format(":{}", inheritedPath);
+    CScopedEnvironmentVariable scopedPath{"PATH", applicationPath};
+
+    const auto                 instanceDirectory = std::filesystem::path(realm->runtimeDirectory()) / "hypr/test-instance";
+    ASSERT_TRUE(std::filesystem::remove(instanceDirectory / XWAYLAND_DISPLAY_METADATA_FILE));
+
+    const auto unavailable = m_manager->openApplication(realm->id(), "realm-application-helper");
+    ASSERT_FALSE(unavailable);
+    EXPECT_TRUE(unavailable.error().contains("XWayland display is unavailable"));
+
+    ASSERT_TRUE(writeXWaylandDisplayMetadata(instanceDirectory, ":88"));
+    ASSERT_TRUE(m_manager->openApplication(realm->id(), "realm-application-helper"));
+
+    const auto state = waitForApplicationState(*m_manager, std::filesystem::path(realm->runtimeDirectory()) / "realm-application-helper.state");
+    ASSERT_FALSE(state.empty());
+    EXPECT_EQ(state.at("DISPLAY"), ":88");
 }
 
 TEST_F(CRealmIPCTest, controlsFullLifecycle) {

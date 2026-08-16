@@ -50,6 +50,7 @@ int main() {
     state << "HYPRLAND_REALM_ID=" << environment("HYPRLAND_REALM_ID") << '\n';
     state << "HYPRLAND_REALM_NAME=" << environment("HYPRLAND_REALM_NAME") << '\n';
     state << "DISPLAY=" << environment("DISPLAY") << '\n';
+    state << "XAUTHORITY=" << environment("XAUTHORITY") << '\n';
     state << "SWAYSOCK=" << environment("SWAYSOCK") << '\n';
     state << "WAYLAND_SOCKET=" << environment("WAYLAND_SOCKET") << '\n';
     state.close();

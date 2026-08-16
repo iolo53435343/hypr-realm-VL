@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include <hyprutils/memory/Casts.hpp>
+#include <realm/Realm.hpp>
 
 using namespace Hyprutils::Memory;
 
@@ -77,6 +78,20 @@ int main() {
     lock.close();
     if (!lock)
         return 6;
+
+    if (realmName == "delayed-xwayland-ready")
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    if (realmName != "no-xwayland-ready") {
+        if (realmName == "invalid-xwayland-ready") {
+            std::ofstream display(instanceDirectory / Realm::XWAYLAND_DISPLAY_METADATA_FILE, std::ios::trunc);
+            display << "host:0\n";
+            display.close();
+            if (!display)
+                return 6;
+        } else if (!Realm::writeXWaylandDisplayMetadata(instanceDirectory, ":77"))
+            return 6;
+    }
 
     if (realmName == "crash") {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

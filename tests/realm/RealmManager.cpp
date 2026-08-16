@@ -147,7 +147,7 @@ TEST_F(CRealmManagerTest, startsPausesResumesStopsAndDestroysRealm) {
     std::ifstream configStream(realm->configPath());
     ASSERT_TRUE(configStream);
     const std::string configContents{std::istreambuf_iterator<char>{configStream}, std::istreambuf_iterator<char>{}};
-    EXPECT_NE(configContents.find("xwayland = {\n        enabled = false,\n    },"), std::string::npos);
+    EXPECT_NE(configContents.find("xwayland = {\n        enabled = true,\n    },"), std::string::npos);
 
     const auto runtimePermissions = std::filesystem::status(realm->runtimeDirectory()).permissions();
     const auto privateMask        = std::filesystem::perms::group_all | std::filesystem::perms::others_all;
@@ -373,6 +373,41 @@ TEST_F(CRealmManagerTest, timesOutCompositorThatNeverBecomesReady) {
     EXPECT_EQ(realm->exitCode(), -1);
     EXPECT_TRUE(destroyEventually(*m_manager, realm->id()));
     EXPECT_EQ(realm->exitCode(), -1);
+}
+
+TEST_F(CRealmManagerTest, requiresXWaylandDisplayMetadataBeforeRunning) {
+    auto created = m_manager->createRealm("no-xwayland-ready");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::FAILED));
+    EXPECT_EQ(realm->exitCode(), -1);
+    EXPECT_TRUE(destroyEventually(*m_manager, realm->id()));
+}
+
+TEST_F(CRealmManagerTest, waitsForDelayedXWaylandReadinessAfterWaylandIsReady) {
+    auto created = m_manager->createRealm("delayed-xwayland-ready");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(75));
+    m_manager->dispatchPendingEvents();
+    EXPECT_EQ(realm->state(), eRealmState::CREATING);
+
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::RUNNING));
+}
+
+TEST_F(CRealmManagerTest, rejectsMalformedXWaylandDisplayMetadata) {
+    auto created = m_manager->createRealm("invalid-xwayland-ready");
+    ASSERT_TRUE(created);
+    const auto realm = *created;
+
+    ASSERT_TRUE(m_manager->startRealm(realm->id()));
+    ASSERT_TRUE(waitForState(*m_manager, realm, eRealmState::FAILED));
+    EXPECT_EQ(realm->exitCode(), -1);
+    EXPECT_TRUE(destroyEventually(*m_manager, realm->id()));
 }
 
 TEST_F(CRealmManagerTest, movesCrashedRealmToFailed) {
