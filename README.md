@@ -27,7 +27,7 @@ can open apps, see, click, type, and work. You can watch it, take over, pause it
 or stop it at any time.**
 
 This is not a VM. A realm is a compositor-managed nested Hyprland instance with
-its own Wayland display, application process group, virtual input devices,
+its own Wayland and XWayland displays, application process group, virtual input devices,
 cursor, capture stream, lifecycle, and host window. The current prototype
 isolates the agent's display and input target; stronger filesystem, network,
 secret, and process isolation is future work.
@@ -107,8 +107,14 @@ isolation. Applications in a realm currently run as the desktop user and may
 inherit the user's normal home directory, network access, and application
 profiles. Clipboard, filesystem, network, secrets, cgroups, and namespace
 fields are not presented as enforced protections until their corresponding
-isolation mechanisms exist. Realms are currently Wayland-only; X11-only
-applications are not supported inside them.
+isolation mechanisms exist. Realm-local XWayland is enabled: readiness requires
+a validated nested `DISPLAY`, and directly launched applications receive that
+display without inheriting the host's X authentication state. Nested XWayland
+teardown remains an explicit runtime acceptance gate because the original
+`0.55.0` prototype reproduced allocator corruption on that path.
+
+The maintained downstream baseline and compatibility decisions are documented
+in [`docs/downstream-v0.56.2-xwayland.md`](docs/downstream-v0.56.2-xwayland.md).
 
 What is enforced today is the computer-use boundary: realm capture does not
 capture the host monitor, virtual input is addressed to the nested Wayland
