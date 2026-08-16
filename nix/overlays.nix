@@ -41,11 +41,14 @@ in
   ];
 
   # Hyprland with its internal dependencies.
-  hyprland = lib.composeManyExtensions (with self.overlays; [
-    udis86
-    glaze
-    hyprland-no-deps
-  ]);
+  hyprland = lib.composeManyExtensions (
+    with self.overlays;
+    [
+      udis86
+      glaze
+      hyprland-no-deps
+    ]
+  );
 
   # Hyprland without any dependencies.
   hyprland-no-deps =
@@ -105,10 +108,10 @@ in
   hyprland-extras = lib.composeManyExtensions [
     inputs.xdph.overlays.default
 
-    # Prevent XDPH from spinning after its compositor connection disappears.
+    # Preserve clean disconnect teardown and automatic portal recovery.
     (_final: prev: {
       xdg-desktop-portal-hyprland = prev.xdg-desktop-portal-hyprland.overrideAttrs (oldAttrs: {
-        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/xdph-handle-disconnected-poll-fds.patch ];
+        patches = (oldAttrs.patches or [ ]) ++ [ ./patches/xdph-realm-disconnect-cleanup.patch ];
       });
     })
   ];

@@ -1,45 +1,43 @@
 diff --git a/contrib/systemd/xdg-desktop-portal-hyprland.service.in b/contrib/systemd/xdg-desktop-portal-hyprland.service.in
+index a2e3760..b85fb7e 100644
 --- a/contrib/systemd/xdg-desktop-portal-hyprland.service.in
 +++ b/contrib/systemd/xdg-desktop-portal-hyprland.service.in
-@@ -11 +11,2 @@
+@@ -8,5 +8,6 @@ ConditionEnvironment=WAYLAND_DISPLAY
+ Type=dbus
+ BusName=org.freedesktop.impl.portal.desktop.hyprland
+ ExecStart=@LIBEXECDIR@/xdg-desktop-portal-hyprland
 -Restart=on-failure
 +Restart=always
 +RestartSec=1s
+ Slice=session.slice
 diff --git a/src/core/PortalManager.cpp b/src/core/PortalManager.cpp
+index 5dc98d4..87e684c 100644
 --- a/src/core/PortalManager.cpp
 +++ b/src/core/PortalManager.cpp
-@@ -347 +346,0 @@
--
-@@ -349,0 +349,3 @@
+@@ -347,6 +347,9 @@ void CPortalManager::startEventLoop() {
+ 
+             int ret = poll(m_sEventLoopInternals.pollFds.data(), m_sEventLoopInternals.pollFds.size(), 5000 /* 5 seconds, reasonable. It's because we might need to terminate */);
+             if (ret < 0) {
 +                if (errno == EINTR)
 +                    continue;
 +
-@@ -351,0 +354 @@
-+                break;
-@@ -354,5 +357,10 @@
--            for (size_t i = 0; i < 3; ++i) {
--                if (m_sEventLoopInternals.pollFds.data()->revents & POLLHUP) {
--                    Debug::log(CRIT, "[core] Disconnected from pollfd id {}", i);
--                    g_pPortalManager->terminate();
--                }
-+            constexpr size_t CORE_FD_COUNT = 3;
-+            const auto       POLLFD_COUNT  = std::min(CORE_FD_COUNT, m_sEventLoopInternals.pollFds.size());
-+            for (size_t i = 0; i < POLLFD_COUNT; ++i) {
-+                const auto REVENTS = m_sEventLoopInternals.pollFds[i].revents;
-+                if (!(REVENTS & (POLLHUP | POLLERR | POLLNVAL)))
-+                    continue;
-+
-+                Debug::log(CRIT, "[core] Disconnected from pollfd id {} (revents: {:#x})", i, REVENTS);
-+                g_pPortalManager->terminate();
-+                break;
-@@ -479,0 +488,4 @@
+                 Debug::log(CRIT, "[core] Polling fds failed with {}", strerror(errno));
+                 g_pPortalManager->terminate();
+                 break;
+@@ -480,18 +483,29 @@ void CPortalManager::startEventLoop() {
+ 
+     Debug::log(ERR, "[core] Terminated");
+ 
 +    if (m_sTimersThread.thread && m_sTimersThread.thread->joinable())
 +        m_sTimersThread.thread->join();
 +    pollThr.join();
 +
-@@ -483 +494,0 @@
+     m_sPortals.globalShortcuts.reset();
+     m_sPortals.screencopy.reset();
+     m_sPortals.screenshot.reset();
 -    m_sHelpers.toplevel.reset();
-@@ -484,0 +496,10 @@
+     m_sPortals.inputCapture.reset();
+ 
 +    m_sHelpers.toplevel.reset();
 +    m_sHelpers.toplevelMapping.reset();
 +
@@ -50,20 +48,28 @@ diff --git a/src/core/PortalManager.cpp b/src/core/PortalManager.cpp
 +    m_sWaylandConnection.xdgOutputManager.reset();
 +    m_sWaylandConnection.shm.reset();
 +    m_sWaylandConnection.registry.reset();
-@@ -489,3 +509,0 @@
++
+     m_pConnection.reset();
+     pw_loop_destroy(m_sPipewire.loop);
+     wl_display_disconnect(m_sWaylandConnection.display);
 -
 -    m_sTimersThread.thread.release();
 -    pollThr.join(); // wait for poll to exit
+ }
+ 
+ sdbus::IConnection* CPortalManager::getConnection() {
 diff --git a/src/core/PortalManager.hpp b/src/core/PortalManager.hpp
+index eb62c1b..3d5d78e 100644
 --- a/src/core/PortalManager.hpp
 +++ b/src/core/PortalManager.hpp
-@@ -125,2 +125,2 @@
--    void  startEventLoop();
--    void  setupXDGOutput(SOutput* output);
-+    void              startEventLoop();
-+    void              setupXDGOutput(SOutput* output);
-@@ -128,2 +128,2 @@
+@@ -125,8 +125,8 @@ class CPortalManager {
+     void  startEventLoop();
+     void  setupXDGOutput(SOutput* output);
+ 
 -    bool  m_bTerminate = false;
 -    pid_t m_iPID       = 0;
 +    std::atomic<bool> m_bTerminate = false;
 +    pid_t             m_iPID       = 0;
+ 
+     struct {
+         std::condition_variable              loopSignal;

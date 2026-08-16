@@ -130,7 +130,7 @@ set(GLES_VERSION "GLES3")
 find_package(OpenGL REQUIRED COMPONENTS ${GLES_VERSION})
 find_package(glslang CONFIG REQUIRED)
 
-find_package(glaze 7...<8 QUIET)
+find_package(glaze QUIET)
 if(NOT glaze_FOUND)
   set(GLAZE_VERSION v7.2.0)
   message(STATUS "glaze dependency not found, retrieving ${GLAZE_VERSION} with FetchContent")
@@ -760,7 +760,8 @@ if(BUILD_TESTING OR WITH_TESTS)
   find_package(GTest CONFIG REQUIRED)
   include(GoogleTest)
   file(GLOB_RECURSE TESTFILES "tests/*.cpp")
-  add_executable(realm_process_helper tests/realm/RealmProcessHelper.cc)
+  add_executable(realm_process_helper tests/realm/RealmProcessHelper.cc
+                                      src/realm/Realm.cpp)
   add_executable(realm_application_helper tests/realm/RealmApplicationHelper.cc)
   add_executable(
     realm_input_controller_process_helper
