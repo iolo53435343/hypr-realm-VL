@@ -272,6 +272,13 @@ customStdenv.mkDerivation (finalAttrs: {
       install hyprtester/surface-scale-transform -t $out/bin
       install hyprtester/xdg-interactive -t $out/bin
       install hyprland_gtests -t $out/bin
+      install -Dm755 realm_process_helper $out/libexec/hyprland-tests/realm_process_helper
+      install -Dm755 realm_application_helper $out/libexec/hyprland-tests/realm_application_helper
+      install -Dm755 realm_input_controller_process_helper $out/libexec/hyprland-tests/realm_input_controller_process_helper
+      wrapProgram $out/bin/hyprland_gtests \
+        --set HYPRLAND_TEST_REALM_PROCESS_HELPER $out/libexec/hyprland-tests/realm_process_helper \
+        --set HYPRLAND_TEST_REALM_APPLICATION_HELPER $out/libexec/hyprland-tests/realm_application_helper \
+        --set HYPRLAND_TEST_REALM_INPUT_CONTROLLER_PROCESS_HELPER $out/libexec/hyprland-tests/realm_input_controller_process_helper
       install hyprtester/child-window -t $out/bin
     ''}
   '';

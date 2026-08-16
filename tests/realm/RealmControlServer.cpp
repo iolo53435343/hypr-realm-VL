@@ -5,6 +5,8 @@
 #include <realm/RealmWindowManager.hpp>
 #include <SharedDefs.hpp>
 
+#include "RealmTestHelpers.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -105,19 +107,20 @@ class CRealmControlServerTest : public testing::Test {
         std::filesystem::permissions(m_root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 
         m_manager         = makeUnique<CRealmManager>(SRealmManagerOptions{
-                    .runtimeRoot            = m_root,
-                    .compositorBinary       = REALM_PROCESS_HELPER_PATH,
-                    .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
-                    .startupTimeout         = std::chrono::seconds(1),
-                    .stopTimeout            = std::chrono::milliseconds(200),
-                    .integrateWithEventLoop = false,
+            .runtimeRoot            = m_root,
+            .compositorBinary       = realmTestHelperPath("HYPRLAND_TEST_REALM_PROCESS_HELPER", REALM_PROCESS_HELPER_PATH),
+            .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
+            .startupTimeout         = std::chrono::seconds(1),
+            .stopTimeout            = std::chrono::milliseconds(200),
+            .integrateWithEventLoop = false,
         });
-        m_inputController = makeUnique<CRealmInputControllerManager>(*m_manager,
-                                                                     SRealmInputControllerOptions{
-                                                                         .controllerBinary       = REALM_INPUT_CONTROLLER_PROCESS_HELPER_PATH,
-                                                                         .integrateWithEventLoop = false,
-                                                                     });
-        m_windowManager   = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
+        m_inputController = makeUnique<CRealmInputControllerManager>(
+            *m_manager,
+            SRealmInputControllerOptions{
+                .controllerBinary       = realmTestHelperPath("HYPRLAND_TEST_REALM_INPUT_CONTROLLER_PROCESS_HELPER", REALM_INPUT_CONTROLLER_PROCESS_HELPER_PATH),
+                .integrateWithEventLoop = false,
+            });
+        m_windowManager = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
         startServer();
     }
 
@@ -192,10 +195,10 @@ class CRealmControlServerTest : public testing::Test {
                 iovec                                         iov{.iov_base = buffer.data(), .iov_len = buffer.size()};
                 std::array<char, CMSG_SPACE(sizeof(int) * 2)> ancillary{};
                 msghdr                                        header{
-                                                           .msg_iov        = &iov,
-                                                           .msg_iovlen     = 1,
-                                                           .msg_control    = ancillary.data(),
-                                                           .msg_controllen = ancillary.size(),
+                    .msg_iov        = &iov,
+                    .msg_iovlen     = 1,
+                    .msg_control    = ancillary.data(),
+                    .msg_controllen = ancillary.size(),
                 };
                 const auto size = recvmsg(client.get(), &header, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
                 if (size > 0) {

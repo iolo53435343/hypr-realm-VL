@@ -569,14 +569,14 @@ std::optional<std::string> CMCPServer::handleMessage(std::string_view message) {
         const auto protocolVersion = std::ranges::find(SUPPORTED_VERSIONS, requestedVersion) != SUPPORTED_VERSIONS.end() ? requestedVersion : std::string{MCP_PROTOCOL_VERSION};
         m_initialized              = true;
         const auto instructions    = m_boundRealm ?
-               std::format("This server is permanently bound to realm '{}'. Host-granted capabilities remain authoritative. Call capture_realm without dimensions immediately before "
-                              "coordinate input, prefer point_and_click, and capture again with wait_for_change after visible actions.",
-                           *m_boundRealm) :
-               std::string{
+            std::format("This server is permanently bound to realm '{}'. Host-granted capabilities remain authoritative. Call capture_realm without dimensions immediately before "
+                        "coordinate input, prefer point_and_click, and capture again with wait_for_change after visible actions.",
+                        *m_boundRealm) :
+            std::string{
                 "This is the Agent Realms demo orchestrator. It may create temporary realms, grant observe/pointer/keyboard, launch direct executables, and place realm windows on "
-                   "numeric host workspaces. Use launch_realm or launch_realms, address later computer-use calls by realm name, and call finish_realm when work is complete. These "
-                   "demo realms "
-                   "are same-user process separation, not filesystem or network sandboxes."};
+                "numeric host workspaces. Use launch_realm or launch_realms, address later computer-use calls by realm name, and call finish_realm when work is complete. These "
+                "demo realms "
+                "are same-user process separation, not filesystem or network sandboxes."};
         const auto result          = std::format(
             R"({{"protocolVersion":{},"capabilities":{{"tools":{{"listChanged":false}}}},"serverInfo":{{"name":"hyprland-realm","version":"0.1.0"}},"instructions":{}}})",
             quoteJSON(protocolVersion), quoteJSON(instructions));

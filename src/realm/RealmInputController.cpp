@@ -678,10 +678,10 @@ struct CRealmInputControllerManager::SImpl {
             };
             std::array<char, CMSG_SPACE(sizeof(int) * 2)> ancillary{};
             msghdr                                        header{
-                                                       .msg_iov        = &iov,
-                                                       .msg_iovlen     = 1,
-                                                       .msg_control    = ancillary.data(),
-                                                       .msg_controllen = ancillary.size(),
+                .msg_iov        = &iov,
+                .msg_iovlen     = 1,
+                .msg_control    = ancillary.data(),
+                .msg_controllen = ancillary.size(),
             };
             const auto received = recvmsg(controller.controlFD.get(), &header, MSG_DONTWAIT | MSG_CMSG_CLOEXEC);
             if (received > 0) {

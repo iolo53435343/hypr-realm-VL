@@ -756,14 +756,14 @@ std::expected<void, std::string> CRealmManager::startRealm(uint64_t id) {
 
     realm->m_compositorPID = launched->execError == 0 ? launched->compositorPID : 0;
     auto& process          = m_processes
-                        .emplace(id,
-                                 SRealmProcess{
-                                     .supervisorPID   = launched->supervisorPID,
-                                     .processGroupPID = launched->compositorPID,
-                                     .statusFD        = std::move(launched->statusFD),
-                                     .startupDeadline = std::chrono::steady_clock::now() + m_options.startupTimeout,
-                                 })
-                        .first->second;
+                                 .emplace(id,
+                                          SRealmProcess{
+                                              .supervisorPID   = launched->supervisorPID,
+                                              .processGroupPID = launched->compositorPID,
+                                              .statusFD        = std::move(launched->statusFD),
+                                              .startupDeadline = std::chrono::steady_clock::now() + m_options.startupTimeout,
+                                          })
+                                 .first->second;
 
     if (m_pollTimer)
         m_pollTimer->updateTimeout(std::chrono::milliseconds(50));

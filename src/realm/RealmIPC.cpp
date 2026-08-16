@@ -243,9 +243,9 @@ CRealmIPC::CRealmIPC(CRealmManager& manager, CRealmWindowManager& windowManager)
             .fn    = [this](eHyprCtlOutputFormat format, std::string) { return realmListRequest(m_manager, format); },
         });
         m_realmCommand  = g_pHyprCtl->registerCommand(SHyprCtlCommand{
-             .name  = "realm",
-             .exact = false,
-             .fn    = [this](eHyprCtlOutputFormat format, std::string request) { return realmCommandRequest(m_manager, m_windowManager, format, request); },
+            .name  = "realm",
+            .exact = false,
+            .fn    = [this](eHyprCtlOutputFormat format, std::string request) { return realmCommandRequest(m_manager, m_windowManager, format, request); },
         });
     }
 
@@ -267,9 +267,9 @@ CRealmIPC::CRealmIPC(CRealmManager& manager, CRealmWindowManager& windowManager)
         if (!g_pEventManager || !event.realm)
             return;
         g_pEventManager->postEvent(SHyprIPCEvent{
-             .event = event.granted ? "realmcapabilitygranted" : "realmcapabilityrevoked",
-             .data  = std::format(R"({{"id":{},"name":"{}","capability":"{}","granted":{}}})", event.realm->id(), escapeJSONStrings(event.realm->name()),
-                                  realmCapabilityName(event.capability), event.granted),
+            .event = event.granted ? "realmcapabilitygranted" : "realmcapabilityrevoked",
+            .data  = std::format(R"({{"id":{},"name":"{}","capability":"{}","granted":{}}})", event.realm->id(), escapeJSONStrings(event.realm->name()),
+                                 realmCapabilityName(event.capability), event.granted),
         });
     });
 }

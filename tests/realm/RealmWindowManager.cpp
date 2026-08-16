@@ -1,6 +1,8 @@
 #include <realm/RealmWindowManager.hpp>
 #include <realm/RealmDecoration.hpp>
 
+#include "RealmTestHelpers.hpp"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -31,12 +33,12 @@ class CRealmWindowManagerTest : public testing::Test {
         std::filesystem::permissions(m_root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 
         m_manager       = makeUnique<CRealmManager>(SRealmManagerOptions{
-                  .runtimeRoot            = m_root,
-                  .compositorBinary       = REALM_PROCESS_HELPER_PATH,
-                  .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
-                  .startupTimeout         = std::chrono::seconds(1),
-                  .stopTimeout            = std::chrono::milliseconds(200),
-                  .integrateWithEventLoop = false,
+            .runtimeRoot            = m_root,
+            .compositorBinary       = realmTestHelperPath("HYPRLAND_TEST_REALM_PROCESS_HELPER", REALM_PROCESS_HELPER_PATH),
+            .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
+            .startupTimeout         = std::chrono::seconds(1),
+            .stopTimeout            = std::chrono::milliseconds(200),
+            .integrateWithEventLoop = false,
         });
         m_windowManager = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
     }

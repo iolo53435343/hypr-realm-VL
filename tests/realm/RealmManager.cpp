@@ -1,5 +1,7 @@
 #include <realm/RealmManager.hpp>
 
+#include "RealmTestHelpers.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cerrno>
@@ -74,7 +76,7 @@ class CRealmManagerTest : public testing::Test {
 
         SRealmManagerOptions options{
             .runtimeRoot            = m_root,
-            .compositorBinary       = REALM_PROCESS_HELPER_PATH,
+            .compositorBinary       = realmTestHelperPath("HYPRLAND_TEST_REALM_PROCESS_HELPER", REALM_PROCESS_HELPER_PATH),
             .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
             .startupTimeout         = std::chrono::seconds(1),
             .stopTimeout            = std::chrono::milliseconds(200),

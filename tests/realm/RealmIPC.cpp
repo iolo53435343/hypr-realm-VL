@@ -2,6 +2,8 @@
 #include <realm/RealmWindowManager.hpp>
 #include <SharedDefs.hpp>
 
+#include "RealmTestHelpers.hpp"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -107,12 +109,12 @@ class CRealmIPCTest : public testing::Test {
         std::filesystem::permissions(m_root, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 
         m_manager       = makeUnique<CRealmManager>(SRealmManagerOptions{
-                  .runtimeRoot            = m_root,
-                  .compositorBinary       = REALM_PROCESS_HELPER_PATH,
-                  .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
-                  .startupTimeout         = std::chrono::seconds(1),
-                  .stopTimeout            = std::chrono::milliseconds(200),
-                  .integrateWithEventLoop = false,
+            .runtimeRoot            = m_root,
+            .compositorBinary       = realmTestHelperPath("HYPRLAND_TEST_REALM_PROCESS_HELPER", REALM_PROCESS_HELPER_PATH),
+            .hostWaylandSocket      = "/tmp/unused-test-wayland-socket",
+            .startupTimeout         = std::chrono::seconds(1),
+            .stopTimeout            = std::chrono::milliseconds(200),
+            .integrateWithEventLoop = false,
         });
         m_windowManager = makeUnique<CRealmWindowManager>(*m_manager, SRealmWindowManagerOptions{.integrateWithEventBus = false});
     }
@@ -193,7 +195,7 @@ TEST_F(CRealmIPCTest, opensAnApplicationInsideTheRealmProcessAndEnvironment) {
     ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
 
     const auto application = std::filesystem::path(realm->runtimeDirectory()) / "bin/realm-application-helper";
-    std::filesystem::create_symlink(REALM_APPLICATION_HELPER_PATH, application);
+    std::filesystem::create_symlink(realmTestHelperPath("HYPRLAND_TEST_REALM_APPLICATION_HELPER", REALM_APPLICATION_HELPER_PATH), application);
     auto applicationPath = application.parent_path().string();
     if (const auto inheritedPath = environmentValue("PATH"); inheritedPath != "<unset>")
         applicationPath += std::format(":{}", inheritedPath);
@@ -259,7 +261,7 @@ TEST_F(CRealmIPCTest, revalidatesXWaylandDisplayForEveryApplicationLaunch) {
     ASSERT_TRUE(waitForIPCState(*m_manager, realm, eRealmState::RUNNING));
 
     const auto application = std::filesystem::path(realm->runtimeDirectory()) / "bin/realm-application-helper";
-    std::filesystem::create_symlink(REALM_APPLICATION_HELPER_PATH, application);
+    std::filesystem::create_symlink(realmTestHelperPath("HYPRLAND_TEST_REALM_APPLICATION_HELPER", REALM_APPLICATION_HELPER_PATH), application);
     auto applicationPath = application.parent_path().string();
     if (const auto inheritedPath = environmentValue("PATH"); inheritedPath != "<unset>")
         applicationPath += std::format(":{}", inheritedPath);

@@ -859,10 +859,10 @@ struct CRealmControlServer::SImpl {
                 };
                 std::array<char, CMSG_SPACE(sizeof(int))> ancillary{};
                 msghdr                                    header{
-                                                       .msg_iov        = &iov,
-                                                       .msg_iovlen     = 1,
-                                                       .msg_control    = ancillary.data(),
-                                                       .msg_controllen = ancillary.size(),
+                    .msg_iov        = &iov,
+                    .msg_iovlen     = 1,
+                    .msg_control    = ancillary.data(),
+                    .msg_controllen = ancillary.size(),
                 };
                 auto* control       = CMSG_FIRSTHDR(&header);
                 control->cmsg_level = SOL_SOCKET;
